@@ -3,11 +3,12 @@ from __future__ import annotations
 import re
 import uuid
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
+from overwatch.agents.incident_brief import AGENT_INCIDENT_BRIEF_EVENT
 from overwatch.agents.risk_review import AGENT_RISK_REVIEW_EVENT
 from overwatch.agents.synthesis import AGENT_SYNTHESIS_EVENT, run_synthesis_agent
 from overwatch.config import Settings
@@ -251,6 +252,34 @@ async def get_job_risk_review(job_id: str, store: StoreDep) -> dict:
     }
 
 
+@router.get("/jobs/{job_id}/agents/incident-brief")
+async def get_job_incident_brief(job_id: str, store: StoreDep) -> dict:
+    """Return the latest stored **incident brief** agent output for this job, if any."""
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    ev = await store.get_latest_event(
+        job_id,
+        agent=AgentTrack.orchestrator,
+        event_type=AGENT_INCIDENT_BRIEF_EVENT,
+    )
+    if ev is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No incident brief run yet. POST /v1/jobs/{id}/agent-runs with agent=incident_brief.",
+        )
+    return {
+        "event_id": ev.id,
+        "observed_at": ev.observed_at.isoformat(),
+        "result": ev.payload.get("result"),
+        "error": ev.payload.get("error"),
+        "attempts": ev.payload.get("attempts"),
+        "truncated_input": ev.payload.get("truncated_input"),
+        "model": ev.payload.get("model"),
+    }
+
+
 @router.post("/jobs/{job_id}/agents/synthesis")
 async def post_job_synthesis(
     job_id: str,
@@ -258,7 +287,7 @@ async def post_job_synthesis(
     store: StoreDep,
     force: bool = False,
     blocking: bool = False,
-) -> dict | JSONResponse:
+) -> Any:
     """
     Run the **synthesis** orchestrator.
 
@@ -396,14 +425,32 @@ async def upload_job(
     if not dest.is_relative_to(ingest_root):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid path")
 
+    max_b = settings.max_upload_bytes
+    cl_hdr = request.headers.get("content-length")
+    if cl_hdr and cl_hdr.isdigit() and int(cl_hdr) > max_b:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Upload too large (max {max_b} bytes)",
+        )
+
     chunk_size = 1024 * 1024
+    written = 0
     try:
         with dest.open("wb") as out:
             while True:
                 block = await file.read(chunk_size)
                 if not block:
                     break
+                written += len(block)
+                if written > max_b:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"Upload too large (max {max_b} bytes)",
+                    )
                 out.write(block)
+    except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
     finally:
         await file.close()
 

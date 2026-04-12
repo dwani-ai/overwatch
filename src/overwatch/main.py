@@ -12,6 +12,8 @@ from overwatch.api.routes import router
 from overwatch.config import Settings
 from overwatch.ingest.folder import FolderIngest
 from overwatch.agents.runner import agent_worker_loop
+from overwatch.middleware import RequestLogMiddleware
+from overwatch.middleware.rate_limit import ApiRateLimitMiddleware, SlidingWindowRateLimiter, client_ip_key
 from overwatch.store import open_store
 from overwatch.worker import worker_loop
 
@@ -47,6 +49,13 @@ async def lifespan(app: FastAPI):
 
     ingest_task = asyncio.create_task(ingest_loop())
 
+    if settings.api_rate_limit_per_minute > 0:
+        app.state._api_rate_limiter = SlidingWindowRateLimiter(settings.api_rate_limit_per_minute)
+    else:
+        app.state._api_rate_limiter = None
+
+    agent_worker_task = asyncio.create_task(agent_worker_loop(store, settings, stop))
+
     logger.info(
         "Overwatch %s — data_dir=%s ingest_dir=%s",
         __version__,
@@ -72,6 +81,7 @@ _settings_for_cors = Settings()
 _origins = _settings_for_cors.cors_origin_list
 if _settings_for_cors.cors_origins.strip() == "*":
     _origins = ["*"]
+app.add_middleware(ApiRateLimitMiddleware, client_key=client_ip_key)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
@@ -79,6 +89,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestLogMiddleware)
 
 app.include_router(router)
 

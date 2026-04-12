@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { AgentKind, JobRecord, RiskReviewResult, SynthesisResult } from "./api";
+import type {
+  AgentKind,
+  AgentRunPublic,
+  IncidentBriefResult,
+  JobRecord,
+  RiskReviewResult,
+  SynthesisResult,
+} from "./api";
 import {
   createAgentRun,
   getJob,
-  getRiskReview,
   getSummary,
-  getSynthesis,
+  listJobAgentRuns,
+  listJobs,
   pollAgentRun,
   uploadVideo,
 } from "./api";
@@ -15,13 +22,74 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function basename(path: string): string {
+  const s = path.replace(/\\/g, "/");
+  const i = s.lastIndexOf("/");
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<JobRecord | null>(null);
   const [summary, setSummary] = useState<Record<string, unknown> | null>(null);
+  const [recentJobs, setRecentJobs] = useState<JobRecord[]>([]);
+  const [recentJobsLoading, setRecentJobsLoading] = useState(false);
+  const [recentJobsError, setRecentJobsError] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [phase, setPhase] = useState<string>("");
+
+  const refreshRecentJobs = useCallback(async () => {
+    setRecentJobsError(null);
+    setRecentJobsLoading(true);
+    try {
+      const rows = await listJobs(40);
+      setRecentJobs(rows);
+    } catch (e) {
+      setRecentJobsError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRecentJobsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshRecentJobs();
+  }, [refreshRecentJobs]);
+
+  useEffect(() => {
+    const busy = recentJobs.some((j) => j.status === "pending" || j.status === "processing");
+    if (!busy) return;
+    const t = setInterval(() => {
+      refreshRecentJobs();
+    }, 2500);
+    return () => clearInterval(t);
+  }, [recentJobs, refreshRecentJobs]);
+
+  const openJob = useCallback(async (jobId: string) => {
+    setErr(null);
+    setPhase("Loading job…");
+    try {
+      const j = await getJob(jobId);
+      setJob(j);
+      if (j.status === "completed") {
+        if (j.summary) {
+          setSummary(j.summary);
+        } else {
+          try {
+            setSummary(await getSummary(jobId));
+          } catch {
+            setSummary(null);
+          }
+        }
+      } else {
+        setSummary(null);
+      }
+      setPhase("");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setPhase("");
+    }
+  }, []);
 
   const pollUntilDone = useCallback(async (jobId: string) => {
     setPhase("Processing…");
@@ -36,6 +104,7 @@ export default function App() {
               const s = await getSummary(jobId);
               setSummary(s);
               setPhase("");
+              await refreshRecentJobs();
               return;
             } catch {
               await sleep(1000);
@@ -46,12 +115,13 @@ export default function App() {
         } else {
           setPhase("");
         }
+        await refreshRecentJobs();
         return;
       }
       await sleep(2000);
     }
     setPhase("Timed out waiting for job");
-  }, []);
+  }, [refreshRecentJobs]);
 
   const onUpload = async () => {
     if (!file) return;
@@ -69,6 +139,7 @@ export default function App() {
       setPhase("");
     } finally {
       setBusy(false);
+      await refreshRecentJobs();
     }
   };
 
@@ -78,6 +149,48 @@ export default function App() {
         <h1>Overwatch</h1>
         <p className="tag">Upload a video — results appear when the job finishes.</p>
       </header>
+
+      <section className="card">
+        <h2>Recent jobs</h2>
+        <p className="muted small">
+          Past uploads stay in the API — select one to view chunk results and agent history.
+        </p>
+        <div className="recent-jobs-toolbar">
+          <button
+            type="button"
+            className="linkish"
+            disabled={recentJobsLoading}
+            onClick={() => refreshRecentJobs()}
+          >
+            {recentJobsLoading ? "Refreshing…" : "Refresh list"}
+          </button>
+        </div>
+        {recentJobsError ? <p className="error small">{recentJobsError}</p> : null}
+        {recentJobsLoading && recentJobs.length === 0 ? (
+          <p className="phase small">Loading recent jobs…</p>
+        ) : null}
+        {!recentJobsLoading && !recentJobsError && recentJobs.length === 0 ? (
+          <p className="muted small">No jobs yet.</p>
+        ) : null}
+        {recentJobs.length > 0 ? (
+          <ul className="recent-jobs">
+            {recentJobs.map((j) => (
+              <li key={j.id}>
+                <button
+                  type="button"
+                  className={`recent-job-btn${job?.id === j.id ? " selected" : ""}`}
+                  onClick={() => openJob(j.id)}
+                >
+                  <span className={`recent-job-status st-${j.status}`}>{j.status}</span>
+                  <span className="recent-job-name">{basename(j.source_path)}</span>
+                  <span className="mono small recent-job-id">{j.id.slice(0, 8)}…</span>
+                  <span className="muted small recent-job-time">{j.created_at}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
 
       <section className="card">
         <label className="label">Video file</label>
@@ -114,6 +227,16 @@ export default function App() {
         </section>
       ) : null}
 
+      {job?.status === "completed" && !summary ? (
+        <section className="card">
+          <h2>Results</h2>
+          <p className="muted small">
+            No summary is stored for this job (for example vLLM was off or the job finished before summaries were
+            written). Chunk and agent views need a summary.
+          </p>
+        </section>
+      ) : null}
+
       {summary ? (
         <SummaryView jobId={job?.status === "completed" ? job.id : null} data={summary} />
       ) : null}
@@ -146,24 +269,92 @@ function SummaryView({ jobId, data }: { jobId: string | null; data: Record<strin
 }
 
 function AgentsPanel({ jobId }: { jobId: string }) {
+  const [allRuns, setAllRuns] = useState<AgentRunPublic[]>([]);
+  const refreshRuns = useCallback(async () => {
+    try {
+      const { items } = await listJobAgentRuns(jobId, 100);
+      items.sort((a, b) => b.created_at.localeCompare(a.created_at));
+      setAllRuns(items);
+    } catch {
+      setAllRuns([]);
+    }
+  }, [jobId]);
+
+  useEffect(() => {
+    refreshRuns();
+  }, [refreshRuns]);
+
+  useEffect(() => {
+    const busy = allRuns.some((r) => r.status === "pending" || r.status === "processing");
+    if (!busy) return;
+    const t = setInterval(() => {
+      refreshRuns();
+    }, 2000);
+    return () => clearInterval(t);
+  }, [allRuns, refreshRuns]);
+
   return (
     <div className="agents-panel">
       <AgentAsyncBlock
         jobId={jobId}
         agent="synthesis"
         title="Synthesis agent"
-        blurb="Cross-chunk narrative from the job JSON. Runs asynchronously; results are stored as events."
+        blurb="Cross-chunk narrative from the job JSON. Runs asynchronously; each run is listed below."
+        runs={allRuns.filter((r) => r.agent === "synthesis")}
+        onRefreshRuns={refreshRuns}
         render={(r) => <SynthesisBody result={r as SynthesisResult} />}
+        previewSynthesis={previewSynthesisRun}
       />
       <AgentAsyncBlock
         jobId={jobId}
         agent="risk_review"
         title="Risk review agent"
-        blurb="Safety and security triage from the same summary (async queue)."
+        blurb="Safety and security triage from the same summary. All runs are kept in history."
+        runs={allRuns.filter((r) => r.agent === "risk_review")}
+        onRefreshRuns={refreshRuns}
         render={(r) => <RiskReviewBody result={r as RiskReviewResult} />}
+        previewRisk={previewRiskRun}
+      />
+      <AgentAsyncBlock
+        jobId={jobId}
+        agent="incident_brief"
+        title="Incident brief agent"
+        blurb="Short incident-style narrative and follow-ups from the summary (no identities)."
+        runs={allRuns.filter((r) => r.agent === "incident_brief")}
+        onRefreshRuns={refreshRuns}
+        render={(r) => <IncidentBriefBody result={r as IncidentBriefResult} />}
+        previewIncidentBrief={previewIncidentBriefRun}
       />
     </div>
   );
+}
+
+function previewSynthesisRun(result: Record<string, unknown> | null): string {
+  if (!result) return "";
+  const s = result.executive_summary;
+  if (typeof s !== "string" || !s.trim()) return "";
+  const t = s.trim();
+  return t.length > 140 ? `${t.slice(0, 140)}…` : t;
+}
+
+function previewRiskRun(result: Record<string, unknown> | null): string {
+  if (!result) return "";
+  const risk = result.overall_risk;
+  const factors = result.risk_factors;
+  const r = typeof risk === "string" ? risk : "?";
+  if (Array.isArray(factors) && factors.length && typeof factors[0] === "string") {
+    const f0 = factors[0];
+    return `${r}: ${f0.length > 100 ? `${f0.slice(0, 100)}…` : f0}`;
+  }
+  return r;
+}
+
+function previewIncidentBriefRun(result: Record<string, unknown> | null): string {
+  if (!result) return "";
+  const n = result.narrative;
+  if (typeof n !== "string" || !n.trim()) return "";
+  const t = n.trim();
+  return t.length > 160 ? `${t.slice(0, 160)}…` : t;
 }
 
 function AgentAsyncBlock({
@@ -171,37 +362,39 @@ function AgentAsyncBlock({
   agent,
   title,
   blurb,
+  runs,
+  onRefreshRuns,
   render,
+  previewSynthesis,
+  previewRisk,
+  previewIncidentBrief,
 }: {
   jobId: string;
   agent: AgentKind;
   title: string;
   blurb: string;
+  runs: AgentRunPublic[];
+  onRefreshRuns: () => Promise<void>;
   render: (result: Record<string, unknown>) => ReactNode;
+  previewSynthesis?: (result: Record<string, unknown> | null) => string;
+  previewRisk?: (result: Record<string, unknown> | null) => string;
+  previewIncidentBrief?: (result: Record<string, unknown> | null) => string;
 }) {
-  const [result, setResult] = useState<Record<string, unknown> | null>(null);
-  const [observedAt, setObservedAt] = useState<string | null>(null);
+  const [openIds, setOpenIds] = useState<Record<string, boolean>>({});
   const [phase, setPhase] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r =
-          agent === "synthesis" ? await getSynthesis(jobId) : await getRiskReview(jobId);
-        if (cancelled || !r.result) return;
-        setResult(r.result as Record<string, unknown>);
-        setObservedAt(r.observed_at);
-      } catch {
-        /* no prior run */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [jobId, agent]);
+  const preview =
+    agent === "synthesis"
+      ? previewSynthesis ?? (() => "")
+      : agent === "risk_review"
+        ? previewRisk ?? (() => "")
+        : previewIncidentBrief ?? (() => "");
+
+  const toggleOpen = (id: string) => {
+    setOpenIds((o) => ({ ...o, [id]: !o[id] }));
+  };
 
   const run = async (force: boolean) => {
     setErr(null);
@@ -211,18 +404,15 @@ function AgentAsyncBlock({
       const q = await createAgentRun(jobId, agent, force);
       setPhase(`Queued (${q.run_id.slice(0, 8)}…)`);
       const done = await pollAgentRun(q.run_id);
+      await onRefreshRuns();
       if (done.status === "failed") {
         setErr(done.error || "Agent run failed");
-        setResult(null);
-        setObservedAt(done.updated_at);
+        setPhase("");
         return;
       }
-      if (done.result) {
-        setResult(done.result);
-        setObservedAt(done.updated_at);
-      }
-      if (done.meta?.cached) setPhase("Served from cache (no new LLM call).");
+      if (done.meta?.cached) setPhase("Served from cache (no new LLM call for this agent).");
       else setPhase("");
+      if (done.result) setOpenIds((o) => ({ ...o, [done.id]: true }));
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setPhase("");
@@ -237,7 +427,7 @@ function AgentAsyncBlock({
       <p className="muted small">{blurb}</p>
       <div className="synthesis-actions">
         <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => run(false)}>
-          {busy ? "Running…" : result ? "Run again" : "Run"}
+          {busy ? "Running…" : runs.length ? "New run" : "Run"}
         </button>
         <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => run(true)}>
           Force re-run
@@ -245,8 +435,54 @@ function AgentAsyncBlock({
       </div>
       {phase ? <p className="phase">{phase}</p> : null}
       {err ? <p className="error">{err}</p> : null}
-      {observedAt ? <p className="muted small">Last update: {observedAt}</p> : null}
-      {result ? <div className="synthesis-body">{render(result)}</div> : null}
+
+      <h4 className="agent-history-title">
+        Run history ({runs.length})
+        <button type="button" className="linkish" onClick={() => onRefreshRuns()}>
+          Refresh
+        </button>
+      </h4>
+      {runs.length === 0 ? (
+        <p className="muted small">No runs yet for this agent on this job.</p>
+      ) : (
+        <ul className="agent-run-list">
+          {runs.map((row) => (
+            <li key={row.id} className="agent-run-row">
+              <div className="agent-run-head">
+                <span className={`agent-run-status st-${row.status}`}>{row.status}</span>
+                <span className="mono small agent-run-id" title={row.id}>
+                  {row.id.slice(0, 8)}…
+                </span>
+                <span className="muted small">{row.created_at}</span>
+                {row.force ? <span className="agent-run-badge">force</span> : null}
+                {row.meta?.cached ? <span className="agent-run-badge">cached</span> : null}
+                {row.event_id != null ? (
+                  <span className="muted small">event #{row.event_id}</span>
+                ) : null}
+              </div>
+              {row.status === "completed" && row.result ? (
+                <p className="agent-run-preview small">{preview(row.result) || "(no preview)"}</p>
+              ) : null}
+              {row.status === "failed" && row.error ? (
+                <p className="error small">{row.error}</p>
+              ) : null}
+              {row.status === "pending" || row.status === "processing" ? (
+                <p className="phase small">In queue or running…</p>
+              ) : null}
+              {row.status === "completed" && row.result ? (
+                <>
+                  <button type="button" className="linkish agent-run-toggle" onClick={() => toggleOpen(row.id)}>
+                    {openIds[row.id] ? "Hide full output" : "Show full output"}
+                  </button>
+                  {openIds[row.id] ? (
+                    <div className="synthesis-body agent-run-body">{render(row.result)}</div>
+                  ) : null}
+                </>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -267,6 +503,17 @@ function RiskReviewBody({ result }: { result: RiskReviewResult }) {
       {result.operator_notes ? <p className="scene">{result.operator_notes}</p> : null}
       <StringList title="Risk factors" items={result.risk_factors} />
       <StringList title="Mitigations" items={result.mitigations_suggested} />
+    </>
+  );
+}
+
+function IncidentBriefBody({ result }: { result: IncidentBriefResult }) {
+  return (
+    <>
+      <p className="scene">{result.narrative}</p>
+      <StringList title="Key moments" items={result.key_moments} />
+      <StringList title="Situational factors" items={result.situational_factors} />
+      <StringList title="Suggested follow-ups" items={result.suggested_followups} />
     </>
   );
 }

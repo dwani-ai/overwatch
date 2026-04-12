@@ -42,3 +42,34 @@ class TestAgentRunsStore(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(again.event_id, 42)
             finally:
                 await conn.close()
+
+    async def test_fail_stale_agent_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            conn, store = await open_store(Path(d))
+            try:
+                job = await store.create_job(
+                    source_type=SourceType.file,
+                    source_path="/tmp/x.mp4",
+                    meta={},
+                )
+                run = await store.create_agent_run(job.id, agent=AgentKind.synthesis, force=False)
+                claimed = await store.claim_next_agent_run()
+                self.assertIsNotNone(claimed)
+                assert claimed is not None
+                self.assertEqual(claimed.id, run.id)
+
+                await conn.execute(
+                    "UPDATE agent_runs SET updated_at = ? WHERE id = ?",
+                    ("2020-01-01T00:00:00+00:00", run.id),
+                )
+                await conn.commit()
+
+                n = await store.fail_stale_agent_runs(older_than_sec=3600)
+                self.assertEqual(n, 1)
+                again = await store.get_agent_run(run.id)
+                self.assertIsNotNone(again)
+                assert again is not None
+                self.assertEqual(again.status, AgentRunStatus.failed)
+                self.assertIsNotNone(again.error)
+            finally:
+                await conn.close()

@@ -17,9 +17,10 @@ All processed video runs are logged with **timestamp + frame index + event paylo
 - **Agents (v0):** Job-level text agents over the stored **summary** JSON (same vLLM as the pipeline):
   - **Synthesis** — cross-chunk narrative and recommended actions (`agent_synthesis` event).
   - **Risk review** — safety / security triage (`agent_risk_review` event).
-  - **Async queue:** **`POST /v1/jobs/{id}/agent-runs`** with body `{"agent":"synthesis"|"risk_review","force":?}` returns **202** and a **`run_id`**; poll **`GET /v1/agent-runs/{run_id}`** until `status` is `completed` or `failed`. A background **agent worker** (started with the API) drains the queue and still appends **orchestrator** events for audit.
+  - **Incident brief** — short handoff narrative and follow-ups (`agent_incident_brief` event).
+  - **Async queue:** **`POST /v1/jobs/{id}/agent-runs`** with body `{"agent":"synthesis"|"risk_review"|"incident_brief","force":?}` returns **202** and a **`run_id`**; poll **`GET /v1/agent-runs/{run_id}`** until `status` is `completed` or `failed`. A background **agent worker** (started with the API) drains the queue and still appends **orchestrator** events for audit. Stale `processing` rows (e.g. after a crash) are marked **failed** periodically.
   - **Blocking synthesis** (optional): **`POST /v1/jobs/{id}/agents/synthesis?blocking=true`** waits for the LLM in-process (legacy / scripts).
-  - **Latest by kind:** **`GET …/agents/synthesis`** and **`GET …/agents/risk-review`** return the newest stored event payload. The web UI runs agents via the async API and polls.  
+  - **Latest by kind:** **`GET …/agents/synthesis`**, **`GET …/agents/risk-review`**, and **`GET …/agents/incident-brief`** return the newest stored event payload. The web UI runs agents via the async API and polls.  
 - **Web UI** (Vite + React): upload a video and poll for job status + summary (`frontend/`; Docker **`overwatch-ui`** publishes the gateway on host port **80**)  
 - **SQLite** job + event store under `DATA_DIR`; jobs include **`summary_json`** (aggregated structured analysis)  
 - **Folder ingest**: poll `INGEST_DIR` for new video files; stable-write detection (`INGEST_STABLE_SEC`)  
@@ -70,6 +71,7 @@ docker compose up --build
 
 - **API + UI on port 80:** `http://localhost/v1/health`, `http://localhost/v1/jobs`, … — the **`overwatch-api`** container is **not** published on 8080; nginx proxies **`/v1/`**, **`/api/`**, **`/docs`**, **`/redoc`**, **`openapi.json`**, and **`/service`** (same JSON as the API’s `GET /` root).  
 - **UI + gateway (Compose):** `http://localhost/` — React app at `/`; ensure nothing else on the host is bound to port 80. If your Docker setup cannot publish host ports below 1024 (some rootless setups), change `overwatch-ui` in `compose.yml` to e.g. `"8088:80"` and use `http://localhost:8088/` (same paths under that origin).  
+- **Upload 502 / “Host is unreachable”:** nginx re-resolves **`overwatch-api`** via Docker DNS (avoids stale IPs after `compose up --build`). **`overwatch-ui`** waits until the API **`healthcheck`** passes so the backend is listening before the gateway starts. If 502 persists, run `docker compose ps` and check **`overwatch-api`** logs (crash/OOM during large uploads).  
 - Remote vLLM: `https://some-vllm` (no local GPU in default compose)
 
 **Creating a job from the host (Docker):** paths inside the container are **not** the same as on your laptop. The compose file mounts host `./data/ingest` at **`/data/ingest`** in the container. Use either:
@@ -126,8 +128,11 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 | `VLLM_CHUNK_MAX_TOKENS` | `1024` | Max completion tokens for **observe** (multimodal JSON) |
 | `VLLM_JSON_RETRY_MAX` | `2` | JSON parse repair rounds per LLM step |
 | `VLLM_SPECIALIST_MAX_TOKENS` | `800` | Max tokens per **text specialist** call |
-| `VLLM_AGENT_MAX_TOKENS` | `2048` | Max tokens for **synthesis** agent (job-level text pass) |
-| `VLLM_AGENT_TIMEOUT_SEC` | `120` | HTTP timeout for synthesis agent chat completion |
+| `VLLM_AGENT_MAX_TOKENS` | `2048` | Max tokens for job-level text agents (synthesis, risk review, incident brief) |
+| `VLLM_AGENT_TIMEOUT_SEC` | `120` | HTTP timeout for job-level text agent chat completions |
+| `MAX_UPLOAD_BYTES` | `536870912` | Multipart upload cap (default 512 MiB; align with reverse proxy `client_max_body_size`) |
+| `AGENT_RUN_STALE_SEC` | `900` | Agent runs stuck in `processing` longer than this are marked failed (worker restart / hang) |
+| `API_RATE_LIMIT_PER_MINUTE` | `0` | Per-IP (or `X-Forwarded-For`) cap over 60s; `0` disables |
 | `VLLM_SEGMENT_MAX_BYTES` | `18000000` | Skip chunk if re-encoded MP4 exceeds this (~18 MB) |
 | `VLLM_VIDEO_SCALE_WIDTH` | `480` | FFmpeg scale width before upload |
 | `VLLM_SEGMENT_INCLUDE_AUDIO` | `true` | AAC in segment; retries video-only if ffmpeg fails |
@@ -146,7 +151,7 @@ Set `VLLM_BASE_URL=` empty to skip all vLLM calls (probe + chat).
 - `POST /v1/jobs/{id}/agent-runs` → queue agent run (**202** + `run_id`); `GET /v1/agent-runs/{run_id}` → status and `result`  
 - `GET /v1/jobs/{id}/agent-runs` → recent runs for that job  
 - `POST /v1/jobs/{id}/agents/synthesis?blocking=true` → blocking synthesis; without `blocking`, **202** + async queue (same as `agent-runs` with `synthesis`)  
-- `GET /v1/jobs/{id}/agents/synthesis` / **`…/agents/risk-review`** → latest stored event payload  
+- `GET /v1/jobs/{id}/agents/synthesis` / **`…/agents/risk-review`** / **`…/agents/incident-brief`** → latest stored event payload  
 
 **Observe multimodal format:** [`chunk_video_user_messages`](src/overwatch/vllm_client.py) — `text` + `video_url` (`data:video/mp4;base64,...`). Structured parsing lives in [`analysis/chunk_pipeline.py`](src/overwatch/analysis/chunk_pipeline.py) and [`analysis/json_extract.py`](src/overwatch/analysis/json_extract.py).
 

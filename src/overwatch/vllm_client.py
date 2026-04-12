@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -136,6 +137,7 @@ async def chat_completion(
     }
     if max_tokens is not None:
         body["max_tokens"] = max_tokens
+    t0 = time.perf_counter()
     try:
         async with httpx.AsyncClient(
             timeout=_http_timeout(timeout_sec),
@@ -143,25 +145,53 @@ async def chat_completion(
         ) as client:
             r = await client.post(url, headers=_headers(api_key), json=body)
             if r.status_code >= 400:
-                return VllmCallResult(
+                res = VllmCallResult(
                     ok=False,
                     url=url,
                     status_code=r.status_code,
                     error=f"HTTP {r.status_code}",
                     body_preview=_truncate(r.text),
                 )
-            return VllmCallResult(ok=True, data=r.json(), url=url, status_code=r.status_code)
+                logger.info(
+                    "vllm_chat_completion ok=%s http=%s duration_ms=%.0f model=%s",
+                    False,
+                    r.status_code,
+                    (time.perf_counter() - t0) * 1000,
+                    model,
+                )
+                return res
+            res = VllmCallResult(ok=True, data=r.json(), url=url, status_code=r.status_code)
+            logger.info(
+                "vllm_chat_completion ok=%s http=%s duration_ms=%.0f model=%s",
+                True,
+                r.status_code,
+                (time.perf_counter() - t0) * 1000,
+                model,
+            )
+            return res
     except httpx.HTTPStatusError as e:
         txt = e.response.text if e.response is not None else ""
+        sc = e.response.status_code if e.response else None
+        logger.info(
+            "vllm_chat_completion ok=%s http=%s duration_ms=%.0f model=%s",
+            False,
+            sc,
+            (time.perf_counter() - t0) * 1000,
+            model,
+        )
         return VllmCallResult(
             ok=False,
             url=url,
-            status_code=e.response.status_code if e.response else None,
+            status_code=sc,
             error=str(e),
             body_preview=_truncate(txt),
         )
     except Exception as e:
-        logger.warning("vLLM chat/completions failed: %s", e)
+        logger.warning(
+            "vLLM chat/completions failed after %.0fms: %s",
+            (time.perf_counter() - t0) * 1000,
+            e,
+        )
         return VllmCallResult(ok=False, url=url, error=type(e).__name__ + ": " + str(e))
 
 

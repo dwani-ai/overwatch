@@ -44,6 +44,12 @@ services:
     build: .
     container_name: overwatch-api
     # API is reached from the host only via overwatch-ui (nginx) on port 80 — /v1/, /api/, /docs, etc.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 90s
     environment:
       - DATA_DIR=/data/overwatch
       - INGEST_DIR=/data/ingest
@@ -66,6 +72,9 @@ services:
       - INGEST_STABLE_SEC=2
       - WORKER_POLL_INTERVAL_SEC=1
       - AGENT_WORKER_POLL_INTERVAL_SEC=0.4
+      - AGENT_RUN_STALE_SEC=${AGENT_RUN_STALE_SEC:-900}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-536870912}
+      - API_RATE_LIMIT_PER_MINUTE=${API_RATE_LIMIT_PER_MINUTE:-0}
     volumes:
       - ./data/ingest:/data/ingest
       - ./data/overwatch:/data/overwatch
@@ -79,5 +88,6 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - overwatch-api
+      overwatch-api:
+        condition: service_healthy
     restart: unless-stopped

@@ -129,6 +129,177 @@ input[type="file"] {
   background: rgba(80, 160, 120, 0.08);
 }
 
+.agent-history-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1rem 0 0.5rem;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #8b98a5;
+}
+
+.linkish {
+  background: none;
+  border: none;
+  color: #6bc4ff;
+  cursor: pointer;
+  font-size: inherit;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.linkish:hover {
+  color: #9ed4ff;
+}
+
+.agent-run-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.agent-run-row {
+  margin-bottom: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  background: #141c28;
+  border: 1px solid #2f3d52;
+  border-radius: 8px;
+}
+
+.agent-run-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+  font-size: 0.82rem;
+}
+
+.agent-run-status {
+  font-weight: 650;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.03em;
+}
+
+.agent-run-status.st-completed {
+  color: #7dcea0;
+}
+
+.agent-run-status.st-failed {
+  color: #ff8a8a;
+}
+
+.agent-run-status.st-pending,
+.agent-run-status.st-processing {
+  color: #c9a227;
+}
+
+.agent-run-badge {
+  font-size: 0.68rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: #2a3850;
+  color: #c8d0d8;
+}
+
+.agent-run-preview {
+  margin: 0.45rem 0 0;
+  color: #c8d0d8;
+  line-height: 1.45;
+}
+
+.agent-run-toggle {
+  margin-top: 0.35rem;
+  font-size: 0.82rem;
+}
+
+.agent-run-body {
+  margin-top: 0.65rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid #2f3d52;
+}
+
+.recent-jobs-toolbar {
+  margin-bottom: 0.5rem;
+}
+
+.recent-jobs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.recent-jobs li {
+  margin-bottom: 0.35rem;
+}
+
+.recent-job-btn {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 0.15rem 0.65rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.5rem 0.65rem;
+  background: #141c28;
+  border: 1px solid #2f3d52;
+  border-radius: 8px;
+  color: #e7ecf1;
+  cursor: pointer;
+  font: inherit;
+}
+
+.recent-job-btn:hover {
+  background: #1a2332;
+}
+
+.recent-job-btn.selected {
+  border-color: #6bc4ff;
+  box-shadow: 0 0 0 1px rgba(107, 196, 255, 0.25);
+}
+
+.recent-job-status {
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-weight: 650;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.recent-job-status.st-completed {
+  color: #7dcea0;
+}
+
+.recent-job-status.st-failed {
+  color: #ff8a8a;
+}
+
+.recent-job-status.st-pending,
+.recent-job-status.st-processing {
+  color: #c9a227;
+}
+
+.recent-job-name {
+  font-size: 0.88rem;
+  word-break: break-all;
+}
+
+.recent-job-id {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.recent-job-time {
+  grid-column: 2 / span 2;
+  grid-row: 2;
+}
+
 .phase {
   margin: 0.75rem 0 0;
   color: #8b98a5;
