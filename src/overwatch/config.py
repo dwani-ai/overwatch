@@ -37,8 +37,14 @@ class Settings(BaseSettings):
 
     worker_poll_interval_sec: float = Field(default=1.0, ge=0.2)
 
-    # Comma-separated origins for browser UI (e.g. http://localhost:5173,http://localhost:3000)
-    cors_origins: str = Field(default="http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000")
+    # Comma-separated origins for browser UI (http://localhost omits :80; include :3000 if you remap the UI port)
+    cors_origins: str = Field(
+        default=(
+            "http://localhost:5173,http://127.0.0.1:5173,"
+            "http://localhost,http://127.0.0.1,"
+            "http://localhost:3000,http://127.0.0.1:3000"
+        )
+    )
 
     @property
     def ingest_suffixes(self) -> frozenset[str]:

@@ -14,7 +14,7 @@ All processed video runs are logged with **timestamp + frame index + event paylo
 ## What is implemented (v0)
 
 - **Overwatch API**: `GET /v1/health`, `GET/POST /v1/jobs`, **`POST /v1/jobs/upload`** (multipart video), **`GET /v1/jobs/{id}/summary`**, **`GET /v1/jobs/{id}/events`** (paginated; `legacy=true` for full list)  
-- **Web UI** (Vite + React): upload a video and poll for job status + summary (`frontend/`; Docker service **`overwatch-ui`** on port **3000**)  
+- **Web UI** (Vite + React): upload a video and poll for job status + summary (`frontend/`; Docker **`overwatch-ui`** publishes the gateway on host port **80**)  
 - **SQLite** job + event store under `DATA_DIR`; jobs include **`summary_json`** (aggregated structured analysis)  
 - **Folder ingest**: poll `INGEST_DIR` for new video files; stable-write detection (`INGEST_STABLE_SEC`)  
 - **Worker** — per chunk:
@@ -63,7 +63,7 @@ docker compose up --build
 ```
 
 - API: `http://localhost:8080/v1/health`  
-- **UI:** `http://localhost:3000` (upload + results; `/api/` is proxied to the API’s `/v1/`)  
+- **UI + gateway (Compose):** `http://localhost/` (port **80**) — React app at `/`; API at **`/v1/`** (canonical) and **`/api/`** (same backend, for the built UI); **`/docs`** / **`/redoc`** / **`openapi.json`** for FastAPI. Ensure nothing else on the host is already bound to port 80. If your Docker setup cannot publish host ports below 1024 (some rootless setups), change `overwatch-ui` in `compose.yml` to e.g. `"8088:80"` and use `http://localhost:8088/` instead (keep **`overwatch-api`** on a different host port if you still publish it).  
 - Remote vLLM: `https://some-vllm` (no local GPU in default compose)
 
 **Creating a job from the host (Docker):** paths inside the container are **not** the same as on your laptop. The compose file mounts host `./data/ingest` at **`/data/ingest`** in the container. Use either:
@@ -124,7 +124,7 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 | `VLLM_VIDEO_SCALE_WIDTH` | `480` | FFmpeg scale width before upload |
 | `VLLM_SEGMENT_INCLUDE_AUDIO` | `true` | AAC in segment; retries video-only if ffmpeg fails |
 | `WORKER_POLL_INTERVAL_SEC` | `1` | Worker idle sleep |
-| `CORS_ORIGINS` | `http://localhost:5173,...` | Comma-separated browser origins for the API; use `*` to allow all (dev only). Needed when the UI origin differs from the API (e.g. Vite on 5173). The Compose UI uses same-origin `/api` and does not rely on CORS. |
+| `CORS_ORIGINS` | `http://localhost:5173,...` | Comma-separated browser origins for the API; use `*` to allow all (dev only). Needed when the UI origin differs from the API (e.g. Vite on 5173). The Compose gateway on port 80 uses same-origin `/api` and does not rely on CORS. |
 
 Set `VLLM_BASE_URL=` empty to skip all vLLM calls (probe + chat).
 

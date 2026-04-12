@@ -75,7 +75,7 @@ services:
       dockerfile: Dockerfile
     container_name: overwatch-ui
     ports:
-      - "3000:80"
+      - "80:80"
     depends_on:
       - overwatch-api
     restart: unless-stopped
