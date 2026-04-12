@@ -29,6 +29,13 @@ export async function uploadVideo(file: File): Promise<JobRecord> {
   return r.json();
 }
 
+export async function listJobs(limit = 50): Promise<JobRecord[]> {
+  const lim = Math.min(Math.max(limit, 1), 200);
+  const r = await fetch(apiUrl(`/jobs?limit=${lim}`));
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
 export async function getJob(id: string): Promise<JobRecord> {
   const r = await fetch(apiUrl(`/jobs/${id}`));
   if (!r.ok) throw new Error(await r.text());
@@ -84,6 +91,16 @@ export async function createAgentRun(
 
 export async function getAgentRun(runId: string): Promise<AgentRunPublic> {
   const r = await fetch(apiUrl(`/agent-runs/${runId}`));
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+export async function listJobAgentRuns(
+  jobId: string,
+  limit = 100,
+): Promise<{ items: AgentRunPublic[] }> {
+  const lim = Math.min(Math.max(limit, 1), 100);
+  const r = await fetch(apiUrl(`/jobs/${jobId}/agent-runs?limit=${lim}`));
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
