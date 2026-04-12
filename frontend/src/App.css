@@ -61,6 +61,44 @@ input[type="file"] {
   cursor: not-allowed;
 }
 
+.btn-secondary {
+  background: #3d4f66;
+  color: #e7ecf1;
+  margin-right: 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.small {
+  font-size: 0.85rem;
+}
+
+.synthesis {
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #2f3d52;
+}
+
+.synthesis-title {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+}
+
+.synthesis-actions {
+  margin-top: 0.5rem;
+}
+
+.synthesis-body {
+  margin-top: 1rem;
+}
+
+.synthesis-body h4 {
+  margin: 0.65rem 0 0.25rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #8b98a5;
+}
+
 .phase {
   margin: 0.75rem 0 0;
   color: #8b98a5;

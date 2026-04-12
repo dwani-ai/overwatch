@@ -7,8 +7,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 
+from overwatch.agents.synthesis import AGENT_SYNTHESIS_EVENT, run_synthesis_agent
 from overwatch.config import Settings
-from overwatch.models import EventRecord, JobCreate, JobRecord, SourceType
+from overwatch.models import AgentTrack, EventRecord, JobCreate, JobRecord, JobStatus, SourceType
 from overwatch.store import JobStore
 
 router = APIRouter(prefix="/v1")
@@ -93,6 +94,120 @@ async def get_job_summary(job_id: str, store: StoreDep) -> dict:
             detail="No summary yet (job still running, failed before analysis, or pre-migration job).",
         )
     return job.summary
+
+
+@router.get("/jobs/{job_id}/agents/synthesis")
+async def get_job_synthesis(job_id: str, store: StoreDep) -> dict:
+    """Return the latest stored synthesis agent output for this job, if any."""
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    ev = await store.get_latest_event(
+        job_id,
+        agent=AgentTrack.orchestrator,
+        event_type=AGENT_SYNTHESIS_EVENT,
+    )
+    if ev is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No synthesis run yet. POST /v1/jobs/{id}/agents/synthesis first.",
+        )
+    return {
+        "event_id": ev.id,
+        "observed_at": ev.observed_at.isoformat(),
+        "result": ev.payload.get("result"),
+        "error": ev.payload.get("error"),
+        "attempts": ev.payload.get("attempts"),
+        "truncated_input": ev.payload.get("truncated_input"),
+        "model": ev.payload.get("model"),
+    }
+
+
+@router.post("/jobs/{job_id}/agents/synthesis")
+async def post_job_synthesis(
+    job_id: str,
+    request: Request,
+    store: StoreDep,
+    force: bool = False,
+) -> dict:
+    """
+    Run the **synthesis** orchestrator: text-only LLM over the job ``summary`` JSON.
+    Idempotent unless ``force=true``. Persists an ``agent_synthesis`` event.
+    """
+    settings: Settings = request.app.state.settings
+    try:
+        job = await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    if job.status != JobStatus.completed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Job must be completed before running agents",
+        )
+    if not job.summary:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Job has no summary — enable VLLM and ensure chunk analysis produced a summary",
+        )
+    if not settings.vllm_base_url.strip():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="VLLM_BASE_URL is not configured",
+        )
+
+    if not force:
+        prev = await store.get_latest_event(
+            job_id,
+            agent=AgentTrack.orchestrator,
+            event_type=AGENT_SYNTHESIS_EVENT,
+        )
+        if (
+            prev is not None
+            and prev.payload.get("result") is not None
+            and not prev.payload.get("error")
+        ):
+            return {
+                "cached": True,
+                "event_id": prev.id,
+                "observed_at": prev.observed_at.isoformat(),
+                "result": prev.payload["result"],
+            }
+
+    result, meta = await run_synthesis_agent(settings, job.summary)
+    payload: dict = {
+        "agent_id": "synthesis",
+        "result": result.model_dump() if result is not None else None,
+        "error": meta.get("error"),
+        "attempts": meta.get("attempts"),
+        "truncated_input": meta.get("truncated_input", False),
+        "model": meta.get("model"),
+    }
+    severity = "error" if result is None else None
+    event_id = await store.append_event(
+        job_id,
+        agent=AgentTrack.orchestrator,
+        event_type=AGENT_SYNTHESIS_EVENT,
+        payload=payload,
+        severity=severity,
+    )
+    latest = await store.get_latest_event(
+        job_id,
+        agent=AgentTrack.orchestrator,
+        event_type=AGENT_SYNTHESIS_EVENT,
+    )
+    observed_at = latest.observed_at.isoformat() if latest else ""
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(meta.get("error") or "Synthesis agent failed"),
+        )
+    return {
+        "cached": False,
+        "event_id": event_id,
+        "observed_at": observed_at,
+        "result": result.model_dump(),
+    }
 
 
 def _ingest_root(settings: Settings) -> Path:

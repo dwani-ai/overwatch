@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     vllm_segment_include_audio: bool = Field(default=True)
     vllm_json_retry_max: int = Field(default=2, ge=1, le=6)
     vllm_specialist_max_tokens: int = Field(default=800, ge=64, le=4096)
+    # Text-only job agents (e.g. synthesis over JobSummary JSON)
+    vllm_agent_max_tokens: int = Field(default=2048, ge=256, le=8192)
+    vllm_agent_timeout_sec: float = Field(default=120.0, ge=10.0)
 
     worker_poll_interval_sec: float = Field(default=1.0, ge=0.2)
 

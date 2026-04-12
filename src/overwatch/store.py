@@ -159,6 +159,29 @@ class JobStore:
         rows = await cur.fetchall()
         return [self._row_to_event(r) for r in rows]
 
+    async def get_latest_event(
+        self,
+        job_id: str,
+        *,
+        agent: AgentTrack | None = None,
+        event_type: str | None = None,
+    ) -> EventRecord | None:
+        clauses: list[str] = ["job_id = ?"]
+        params: list[Any] = [job_id]
+        if agent is not None:
+            clauses.append("agent = ?")
+            params.append(agent.value)
+        if event_type is not None:
+            clauses.append("event_type = ?")
+            params.append(event_type)
+        where = " AND ".join(clauses)
+        cur = await self._conn.execute(
+            f"SELECT * FROM events WHERE {where} ORDER BY id DESC LIMIT 1",
+            params,
+        )
+        row = await cur.fetchone()
+        return None if row is None else self._row_to_event(row)
+
     async def list_events_page(
         self,
         job_id: str,

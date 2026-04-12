@@ -24,11 +24,14 @@ class JobStatus(str, Enum):
 
 
 class AgentTrack(str, Enum):
+    """Per-event attribution: pipeline steps or job-level agents."""
+
     main_events = "main_events"
     security = "security"
     logistics = "logistics"
     attendance = "attendance"
     pipeline = "pipeline"
+    orchestrator = "orchestrator"
 
 
 class JobCreate(BaseModel):
@@ -205,3 +208,32 @@ class JobSummaryPayload(BaseModel):
     planned_chunk_count: int = 0
     analysed_chunk_count: int = 0
     chunk_analyses: list[ChunkAnalysisMerged] = Field(default_factory=list)
+
+
+# --- Job-level agents (text-only over stored JSON) ---
+
+
+class SynthesisAgentResult(BaseModel):
+    """Structured output from the synthesis orchestrator (post-job summary)."""
+
+    schema_version: Literal["1"] = "1"
+    executive_summary: str = Field(
+        default="",
+        description="Short narrative for an operator (2–5 sentences).",
+    )
+    key_observations: list[str] = Field(
+        default_factory=list,
+        max_length=24,
+        description="Bullet facts grounded in the chunk analyses.",
+    )
+    security_highlights: list[str] = Field(default_factory=list, max_length=16)
+    logistics_highlights: list[str] = Field(default_factory=list, max_length=16)
+    attendance_summary: str = Field(
+        default="",
+        description="One short paragraph; counts only, no identities.",
+    )
+    recommended_actions: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+        description="Concrete next steps for review or follow-up.",
+    )

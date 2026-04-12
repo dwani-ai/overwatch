@@ -1,6 +1,6 @@
-import { useCallback, useState } from "react";
-import type { JobRecord } from "./api";
-import { getJob, getSummary, uploadVideo } from "./api";
+import { useCallback, useEffect, useState } from "react";
+import type { JobRecord, SynthesisResult } from "./api";
+import { getJob, getSummary, getSynthesis, postSynthesis, uploadVideo } from "./api";
 import "./App.css";
 
 function sleep(ms: number) {
@@ -106,12 +106,14 @@ export default function App() {
         </section>
       ) : null}
 
-      {summary ? <SummaryView data={summary} /> : null}
+      {summary ? (
+        <SummaryView jobId={job?.status === "completed" ? job.id : null} data={summary} />
+      ) : null}
     </div>
   );
 }
 
-function SummaryView({ data }: { data: Record<string, unknown> }) {
+function SummaryView({ jobId, data }: { jobId: string | null; data: Record<string, unknown> }) {
   const chunks = data.chunk_analyses;
   return (
     <section className="card">
@@ -119,6 +121,7 @@ function SummaryView({ data }: { data: Record<string, unknown> }) {
       <p className="muted">
         {String(data.analysed_chunk_count ?? 0)} / {String(data.planned_chunk_count ?? "?")} chunks
       </p>
+      {jobId ? <SynthesisPanel jobId={jobId} /> : null}
       {Array.isArray(chunks) && chunks.length > 0 ? (
         <ul className="chunk-list">
           {chunks.map((c, i) => (
@@ -131,6 +134,102 @@ function SummaryView({ data }: { data: Record<string, unknown> }) {
         <pre className="json">{JSON.stringify(data, null, 2)}</pre>
       )}
     </section>
+  );
+}
+
+function SynthesisPanel({ jobId }: { jobId: string }) {
+  const [result, setResult] = useState<SynthesisResult | null>(null);
+  const [meta, setMeta] = useState<{ cached?: boolean; observed_at?: string; error?: string | null }>({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await getSynthesis(jobId);
+        if (cancelled) return;
+        if (r.result) setResult(r.result);
+        setMeta({ observed_at: r.observed_at, error: r.error ?? null });
+      } catch {
+        /* no prior run */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [jobId]);
+
+  const run = async (force: boolean) => {
+    setErr(null);
+    setBusy(true);
+    try {
+      const r = await postSynthesis(jobId, force);
+      if (r.result) setResult(r.result);
+      setMeta({
+        cached: r.cached,
+        observed_at: r.observed_at,
+        error: r.error ?? null,
+      });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="synthesis">
+      <h3 className="synthesis-title">Synthesis agent</h3>
+      <p className="muted small">
+        Cross-chunk summary from the job JSON (text-only LLM). Stored as an event; safe to re-run.
+      </p>
+      <div className="synthesis-actions">
+        <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => run(false)}>
+          {busy ? "Running…" : result ? "Refresh from server" : "Run synthesis"}
+        </button>
+        <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => run(true)}>
+          Re-run (force)
+        </button>
+      </div>
+      {err ? <p className="error">{err}</p> : null}
+      {meta.cached ? <p className="phase">Served from cache (same job, no new LLM call).</p> : null}
+      {meta.observed_at ? (
+        <p className="muted small">
+          Last run: {meta.observed_at}
+          {meta.error ? <span className="error"> — {meta.error}</span> : null}
+        </p>
+      ) : null}
+      {result ? (
+        <div className="synthesis-body">
+          <p className="scene">{result.executive_summary}</p>
+          {result.attendance_summary ? (
+            <div className="section">
+              <h4>Attendance</h4>
+              <p className="small">{result.attendance_summary}</p>
+            </div>
+          ) : null}
+          <StringList title="Key observations" items={result.key_observations} />
+          <StringList title="Security" items={result.security_highlights} />
+          <StringList title="Logistics" items={result.logistics_highlights} />
+          <StringList title="Recommended actions" items={result.recommended_actions} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StringList({ title, items }: { title: string; items: string[] }) {
+  if (!items?.length) return null;
+  return (
+    <div className="section">
+      <h4>{title}</h4>
+      <ul>
+        {items.map((s, i) => (
+          <li key={i}>{s}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

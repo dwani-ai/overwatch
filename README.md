@@ -14,6 +14,7 @@ All processed video runs are logged with **timestamp + frame index + event paylo
 ## What is implemented (v0)
 
 - **Overwatch API**: `GET /v1/health`, `GET/POST /v1/jobs`, **`POST /v1/jobs/upload`** (multipart video), **`GET /v1/jobs/{id}/summary`**, **`GET /v1/jobs/{id}/events`** (paginated; `legacy=true` for full list)  
+- **Agents (v0):** **`POST /v1/jobs/{id}/agents/synthesis`** runs a **synthesis** orchestrator (text-only LLM over the job summary JSON). **`GET`** the same path returns the latest stored run. Output is appended as an event (`agent`=`orchestrator`, `event_type`=`agent_synthesis`). The web UI exposes this under **Results** for completed jobs.  
 - **Web UI** (Vite + React): upload a video and poll for job status + summary (`frontend/`; Docker **`overwatch-ui`** publishes the gateway on host port **80**)  
 - **SQLite** job + event store under `DATA_DIR`; jobs include **`summary_json`** (aggregated structured analysis)  
 - **Folder ingest**: poll `INGEST_DIR` for new video files; stable-write detection (`INGEST_STABLE_SEC`)  
@@ -120,6 +121,8 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 | `VLLM_CHUNK_MAX_TOKENS` | `1024` | Max completion tokens for **observe** (multimodal JSON) |
 | `VLLM_JSON_RETRY_MAX` | `2` | JSON parse repair rounds per LLM step |
 | `VLLM_SPECIALIST_MAX_TOKENS` | `800` | Max tokens per **text specialist** call |
+| `VLLM_AGENT_MAX_TOKENS` | `2048` | Max tokens for **synthesis** agent (job-level text pass) |
+| `VLLM_AGENT_TIMEOUT_SEC` | `120` | HTTP timeout for synthesis agent chat completion |
 | `VLLM_SEGMENT_MAX_BYTES` | `18000000` | Skip chunk if re-encoded MP4 exceeds this (~18 MB) |
 | `VLLM_VIDEO_SCALE_WIDTH` | `480` | FFmpeg scale width before upload |
 | `VLLM_SEGMENT_INCLUDE_AUDIO` | `true` | AAC in segment; retries video-only if ffmpeg fails |
@@ -134,6 +137,7 @@ Set `VLLM_BASE_URL=` empty to skip all vLLM calls (probe + chat).
 - `GET /v1/jobs/{id}/events?legacy=true` → full array (large jobs)  
 - `GET /v1/jobs/{id}/summary` → aggregated `chunk_analyses` after the job completes  
 - `GET /v1/jobs/{id}` includes `summary` when present  
+- `POST /v1/jobs/{id}/agents/synthesis` → run synthesis agent (`force=true` to ignore cache); `GET` → latest stored payload  
 
 **Observe multimodal format:** [`chunk_video_user_messages`](src/overwatch/vllm_client.py) — `text` + `video_url` (`data:video/mp4;base64,...`). Structured parsing lives in [`analysis/chunk_pipeline.py`](src/overwatch/analysis/chunk_pipeline.py) and [`analysis/json_extract.py`](src/overwatch/analysis/json_extract.py).
 
