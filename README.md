@@ -62,20 +62,20 @@ export VLLM_MODEL=gemma4  # served model id on your vLLM
 docker compose up --build
 ```
 
-- API: `http://localhost:8080/v1/health`  
-- **UI + gateway (Compose):** `http://localhost/` (port **80**) — React app at `/`; API at **`/v1/`** (canonical) and **`/api/`** (same backend, for the built UI); **`/docs`** / **`/redoc`** / **`openapi.json`** for FastAPI. Ensure nothing else on the host is already bound to port 80. If your Docker setup cannot publish host ports below 1024 (some rootless setups), change `overwatch-ui` in `compose.yml` to e.g. `"8088:80"` and use `http://localhost:8088/` instead (keep **`overwatch-api`** on a different host port if you still publish it).  
+- **API + UI on port 80:** `http://localhost/v1/health`, `http://localhost/v1/jobs`, … — the **`overwatch-api`** container is **not** published on 8080; nginx proxies **`/v1/`**, **`/api/`**, **`/docs`**, **`/redoc`**, **`openapi.json`**, and **`/service`** (same JSON as the API’s `GET /` root).  
+- **UI + gateway (Compose):** `http://localhost/` — React app at `/`; ensure nothing else on the host is bound to port 80. If your Docker setup cannot publish host ports below 1024 (some rootless setups), change `overwatch-ui` in `compose.yml` to e.g. `"8088:80"` and use `http://localhost:8088/` (same paths under that origin).  
 - Remote vLLM: `https://some-vllm` (no local GPU in default compose)
 
 **Creating a job from the host (Docker):** paths inside the container are **not** the same as on your laptop. The compose file mounts host `./data/ingest` at **`/data/ingest`** in the container. Use either:
 
 ```bash
 # Easiest: basename only (resolved under INGEST_DIR in the container)
-curl -s -X POST 'http://localhost:8080/v1/jobs' \
+curl -s -X POST 'http://localhost/v1/jobs' \
   -H 'Content-Type: application/json' \
   -d '{"filename":"warehouse-1.mp4"}'
 
 # Or the full path *as seen inside the container*
-curl -s -X POST 'http://localhost:8080/v1/jobs' \
+curl -s -X POST 'http://localhost/v1/jobs' \
   -H 'Content-Type: application/json' \
   -d '{"source_path":"/data/ingest/warehouse-1.mp4"}'
 ```

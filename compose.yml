@@ -43,8 +43,7 @@ services:
   overwatch-api:
     build: .
     container_name: overwatch-api
-    ports:
-      - "8080:8080"
+    # API is reached from the host only via overwatch-ui (nginx) on port 80 — /v1/, /api/, /docs, etc.
     environment:
       - DATA_DIR=/data/overwatch
       - INGEST_DIR=/data/ingest
