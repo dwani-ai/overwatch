@@ -1,0 +1,171 @@
+.app {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+}
+
+.header h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.75rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.tag {
+  margin: 0;
+  color: #8b98a5;
+  font-size: 0.95rem;
+}
+
+.card {
+  margin-top: 1.5rem;
+  padding: 1.25rem 1.35rem;
+  background: #1a2332;
+  border: 1px solid #2f3d52;
+  border-radius: 10px;
+}
+
+.card h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+}
+
+.label {
+  display: block;
+  font-size: 0.85rem;
+  color: #8b98a5;
+  margin-bottom: 0.35rem;
+}
+
+input[type="file"] {
+  display: block;
+  width: 100%;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  color: #c8d0d8;
+}
+
+.btn {
+  padding: 0.55rem 1.1rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #0f1419;
+  background: #6bc4ff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.phase {
+  margin: 0.75rem 0 0;
+  color: #8b98a5;
+  font-size: 0.9rem;
+}
+
+.error {
+  margin: 0.75rem 0 0;
+  color: #ff8a8a;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.kv dt {
+  margin: 0;
+  color: #8b98a5;
+}
+
+.kv dd {
+  margin: 0;
+}
+
+.mono {
+  font-family: ui-monospace, monospace;
+  word-break: break-all;
+}
+
+.mono.small {
+  font-size: 0.8rem;
+}
+
+.muted {
+  color: #8b98a5;
+  font-size: 0.9rem;
+}
+
+.json {
+  margin: 0.75rem 0 0;
+  padding: 1rem;
+  background: #0f1419;
+  border-radius: 8px;
+  overflow: auto;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  border: 1px solid #2f3d52;
+}
+
+.chunk-list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+}
+
+.chunk-item {
+  margin-bottom: 0.65rem;
+}
+
+.toggle {
+  width: 100%;
+  text-align: left;
+  padding: 0.65rem 0.85rem;
+  background: #243044;
+  border: 1px solid #2f3d52;
+  border-radius: 8px;
+  color: #e7ecf1;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.toggle:hover {
+  background: #2a3850;
+}
+
+.chunk-body {
+  margin-top: 0.5rem;
+  padding: 0 0 0 0.25rem;
+}
+
+.scene {
+  margin: 0 0 0.75rem;
+  font-size: 0.92rem;
+}
+
+.section {
+  margin-bottom: 0.85rem;
+}
+
+.section h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #8b98a5;
+}
+
+.section ul {
+  margin: 0;
+  padding-left: 1.15rem;
+  font-size: 0.88rem;
+}

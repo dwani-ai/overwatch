@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import re
+import uuid
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 
 from overwatch.config import Settings
 from overwatch.models import EventRecord, JobCreate, JobRecord, SourceType
@@ -94,7 +96,22 @@ async def get_job_summary(job_id: str, store: StoreDep) -> dict:
 
 
 def _ingest_root(settings: Settings) -> Path:
-    return settings.ingest_dir.expanduser().resolve()
+    root = settings.ingest_dir.expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _safe_stored_filename(original: str | None) -> str:
+    p = Path(original or "video.mp4")
+    name = p.name
+    if not name or ".." in name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file name",
+        )
+    suf = p.suffix.lower() or ".mp4"
+    stem = re.sub(r"[^a-zA-Z0-9._-]", "_", p.stem).strip("._") or "video"
+    return f"{stem[:160]}{suf}"
 
 
 def _reject_not_under_ingest(path: Path, ingest_root: Path) -> None:
@@ -110,6 +127,47 @@ def _reject_not_under_ingest(path: Path, ingest_root: Path) -> None:
                 "like /home/..."
             ),
         ) from None
+
+
+@router.post("/jobs/upload", response_model=JobRecord, status_code=status.HTTP_201_CREATED)
+async def upload_job(
+    request: Request,
+    store: StoreDep,
+    file: UploadFile = File(...),
+) -> JobRecord:
+    """Save an uploaded video under ``INGEST_DIR`` and enqueue a processing job."""
+    settings = request.app.state.settings
+    ingest_root = _ingest_root(settings)
+    suffix = Path(file.filename or "").suffix.lower() or ".mp4"
+    if suffix not in settings.ingest_suffixes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file type {suffix!r}; allowed: {sorted(settings.ingest_suffixes)}",
+        )
+    safe = _safe_stored_filename(file.filename)
+    dest = (ingest_root / f"{uuid.uuid4().hex}_{safe}").resolve()
+    if not dest.is_relative_to(ingest_root):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid path")
+
+    chunk_size = 1024 * 1024
+    try:
+        with dest.open("wb") as out:
+            while True:
+                block = await file.read(chunk_size)
+                if not block:
+                    break
+                out.write(block)
+    finally:
+        await file.close()
+
+    st = dest.stat()
+    mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))
+    fp = f"{st.st_size}:{mtime_ns}"
+    return await store.create_job(
+        source_type=SourceType.file,
+        source_path=str(dest),
+        meta={"fingerprint": fp, "ingest": "upload"},
+    )
 
 
 @router.post("/jobs", response_model=JobRecord, status_code=status.HTTP_201_CREATED)

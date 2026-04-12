@@ -68,3 +68,14 @@ services:
       - ./data/ingest:/data/ingest
       - ./data/overwatch:/data/overwatch
     restart: unless-stopped
+
+  overwatch-ui:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: overwatch-ui
+    ports:
+      - "3000:80"
+    depends_on:
+      - overwatch-api
+    restart: unless-stopped

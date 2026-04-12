@@ -5,6 +5,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from overwatch import __version__
 from overwatch.api.routes import router
@@ -62,6 +63,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Overwatch", version=__version__, lifespan=lifespan)
+
+_settings_for_cors = Settings()
+_origins = _settings_for_cors.cors_origin_list
+if _settings_for_cors.cors_origins.strip() == "*":
+    _origins = ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(router)
 
 
