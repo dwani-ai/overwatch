@@ -13,7 +13,8 @@ All processed video runs are logged with **timestamp + frame index + event paylo
 
 ## What is implemented (v0)
 
-- **Overwatch API**: `GET /v1/health`, `GET/POST /v1/jobs`, **`GET /v1/jobs/{id}/summary`**, **`GET /v1/jobs/{id}/events`** (paginated; `legacy=true` for full list)  
+- **Overwatch API**: `GET /v1/health`, `GET/POST /v1/jobs`, **`POST /v1/jobs/upload`** (multipart video), **`GET /v1/jobs/{id}/summary`**, **`GET /v1/jobs/{id}/events`** (paginated; `legacy=true` for full list)  
+- **Web UI** (Vite + React): upload a video and poll for job status + summary (`frontend/`; Docker service **`overwatch-ui`** on port **3000**)  
 - **SQLite** job + event store under `DATA_DIR`; jobs include **`summary_json`** (aggregated structured analysis)  
 - **Folder ingest**: poll `INGEST_DIR` for new video files; stable-write detection (`INGEST_STABLE_SEC`)  
 - **Worker** — per chunk:
@@ -21,7 +22,7 @@ All processed video runs are logged with **timestamp + frame index + event paylo
   2. **Specialists** (text-only, 3 calls): `main_events`, `security`+`logistics`, **count-only** `attendance`  
   3. **Merged** `ChunkAnalysisMerged` stored on **`chunk_analysis`** event  
   4. **Job summary** (`schema_version: "1"`) lists all chunk merges → **`GET …/summary`** and `JobRecord.summary`  
-- **Docker Compose**: **`overwatch-api` only** by default; local GPU vLLM is optional (`--profile local-vllm`).
+- **Docker Compose**: **`overwatch-api`** + **`overwatch-ui`** by default; local GPU vLLM is optional (`--profile local-vllm`).
 
 ## Remote vLLM (phase 1)
 
@@ -46,6 +47,8 @@ PYTHONPATH=src uvicorn overwatch.main:app --reload --port 8080
 
 Drop files into `data/ingest/` (e.g. `.mp4`). After they are stable for `INGEST_STABLE_SEC`, a job is enqueued.
 
+**Web UI (development):** in another terminal, from `frontend/` run `npm install` then `npm run dev`. The dev server proxies `/api/*` to `http://127.0.0.1:8080/v1/*`, so keep the API on port **8080** and open **http://localhost:5173**. You can upload a file there instead of copying into `INGEST_DIR`.
+
 ## Run with Docker Compose
 
 Set **`VLLM_BASE_URL`** (and optional **`VLLM_API_KEY`**) in your environment or a **`.env`** file next to `compose.yml` (Compose loads it automatically). Example:
@@ -59,7 +62,8 @@ export VLLM_MODEL=gemma4  # served model id on your vLLM
 docker compose up --build
 ```
 
-- Overwatch: `http://localhost:8080/v1/health`  
+- API: `http://localhost:8080/v1/health`  
+- **UI:** `http://localhost:3000` (upload + results; `/api/` is proxied to the API’s `/v1/`)  
 - Remote vLLM: `https://some-vllm` (no local GPU in default compose)
 
 **Creating a job from the host (Docker):** paths inside the container are **not** the same as on your laptop. The compose file mounts host `./data/ingest` at **`/data/ingest`** in the container. Use either:
@@ -120,6 +124,7 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 | `VLLM_VIDEO_SCALE_WIDTH` | `480` | FFmpeg scale width before upload |
 | `VLLM_SEGMENT_INCLUDE_AUDIO` | `true` | AAC in segment; retries video-only if ffmpeg fails |
 | `WORKER_POLL_INTERVAL_SEC` | `1` | Worker idle sleep |
+| `CORS_ORIGINS` | `http://localhost:5173,...` | Comma-separated browser origins for the API; use `*` to allow all (dev only). Needed when the UI origin differs from the API (e.g. Vite on 5173). The Compose UI uses same-origin `/api` and does not rely on CORS. |
 
 Set `VLLM_BASE_URL=` empty to skip all vLLM calls (probe + chat).
 
