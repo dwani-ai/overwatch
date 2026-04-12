@@ -48,7 +48,7 @@ services:
     environment:
       - DATA_DIR=/data/overwatch
       - INGEST_DIR=/data/ingest
-      - VLLM_BASE_URL={VLLM_BASE_URL}
+      - VLLM_BASE_URL=${VLLM_BASE_URL}
       - VLLM_MODEL=${VLLM_MODEL:-gemma4}
       - VLLM_API_KEY=${VLLM_API_KEY}
       - VLLM_CHAT_TIMEOUT_SEC=120

@@ -43,6 +43,26 @@ class VllmCallResult:
     error: str | None = None
     body_preview: str | None = None
 
+    def to_event_payload(
+        self,
+        *,
+        response_key: str = "data",
+        **extra: Any,
+    ) -> dict[str, Any]:
+        """Plain dict for SQLite/JSON (never embed ``VllmCallResult`` itself)."""
+        out: dict[str, Any] = {"ok": self.ok, **extra}
+        if self.url is not None:
+            out["url"] = self.url
+        if self.status_code is not None:
+            out["status_code"] = self.status_code
+        if self.error is not None:
+            out["error"] = self.error
+        if self.body_preview is not None:
+            out["body_preview"] = self.body_preview
+        if self.data is not None:
+            out[response_key] = self.data
+        return out
+
 
 async def fetch_models(
     openai_base: str,

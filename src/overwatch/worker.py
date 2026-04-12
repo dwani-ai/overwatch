@@ -65,12 +65,12 @@ async def process_one_job(store: JobStore, settings: Settings) -> bool:
 
         base = settings.vllm_base_url.strip()
         if base:
-            models = await fetch_models(base, api_key=settings.vllm_api_key)
+            models_res = await fetch_models(base, api_key=settings.vllm_api_key)
             await store.append_event(
                 job.id,
                 agent=AgentTrack.pipeline,
                 event_type="vllm_models",
-                payload={"ok": models is not None, "models": models},
+                payload=models_res.to_event_payload(response_key="models"),
             )
 
             summary = (
@@ -84,24 +84,24 @@ async def process_one_job(store: JobStore, settings: Settings) -> bool:
                 "Reply briefly: (1) confirm you received this, "
                 "(2) one sentence on how you would analyse this video once frames or clips are attached."
             )
-            chat = await chat_completion(
+            chat_res = await chat_completion(
                 base,
                 model=settings.vllm_model,
                 messages=[{"role": "user", "content": summary}],
                 api_key=settings.vllm_api_key,
                 timeout_sec=settings.vllm_chat_timeout_sec,
             )
-            text = extract_assistant_text(chat)
+            text = extract_assistant_text(chat_res.data)
+            choices = chat_res.data.get("choices", []) if chat_res.data else []
             await store.append_event(
                 job.id,
                 agent=AgentTrack.pipeline,
                 event_type="vllm_chat",
-                payload={
-                    "ok": chat is not None,
-                    "model": settings.vllm_model,
-                    "assistant_preview": (text[:2000] + "…") if text and len(text) > 2000 else text,
-                    "raw_choice_count": len(chat.get("choices", [])) if chat else 0,
-                },
+                payload=chat_res.to_event_payload(
+                    model=settings.vllm_model,
+                    assistant_preview=(text[:2000] + "…") if text and len(text) > 2000 else text,
+                    raw_choice_count=len(choices),
+                ),
             )
 
         await store.update_job_status(job.id, JobStatus.completed)
