@@ -18,9 +18,9 @@ class Settings(BaseSettings):
     ingest_stable_sec: float = Field(default=2.0, ge=0.0)
     ingest_extensions: str = Field(default=".mp4,.mkv,.mov,.avi,.webm,.m4v")
 
-    # OpenAI-compatible root (prefix before /chat/completions), e.g. https://host/ai/v1
+    # OpenAI-compatible root (prefix before /chat/completions), e.g. https://host/v1
     vllm_base_url: str = Field(
-        default="https://vllm-video-api.dwani.ai/ai/v1",
+        default="https://vllm-video-api.dwani.ai/v1",
     )
     vllm_model: str = Field(default="gemma4")
     vllm_api_key: str | None = Field(default=None)

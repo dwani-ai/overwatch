@@ -1,4 +1,5 @@
 node_modules/
+data/
 movie_pitches/
 chroma_db/
 my-embedding-gemma/

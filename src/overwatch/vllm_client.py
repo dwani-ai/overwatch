@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -26,21 +27,54 @@ def _headers(api_key: str | None) -> dict[str, str]:
     return h
 
 
+def _truncate(s: str, max_len: int = 800) -> str:
+    s = s.strip()
+    if len(s) <= max_len:
+        return s
+    return s[:max_len] + "…"
+
+
+@dataclass(frozen=True)
+class VllmCallResult:
+    ok: bool
+    data: dict[str, Any] | None = None
+    url: str | None = None
+    status_code: int | None = None
+    error: str | None = None
+    body_preview: str | None = None
+
+
 async def fetch_models(
     openai_base: str,
     *,
     api_key: str | None = None,
     timeout_sec: float = 15.0,
-) -> dict[str, Any] | None:
+) -> VllmCallResult:
     url = models_url(openai_base)
     try:
-        async with httpx.AsyncClient(timeout=timeout_sec) as client:
+        async with httpx.AsyncClient(timeout=timeout_sec, follow_redirects=True) as client:
             r = await client.get(url, headers=_headers(api_key))
-            r.raise_for_status()
-            return r.json()
+            if r.status_code >= 400:
+                return VllmCallResult(
+                    ok=False,
+                    url=url,
+                    status_code=r.status_code,
+                    error=f"HTTP {r.status_code}",
+                    body_preview=_truncate(r.text),
+                )
+            return VllmCallResult(ok=True, data=r.json(), url=url, status_code=r.status_code)
+    except httpx.HTTPStatusError as e:
+        txt = e.response.text if e.response is not None else ""
+        return VllmCallResult(
+            ok=False,
+            url=url,
+            status_code=e.response.status_code if e.response else None,
+            error=str(e),
+            body_preview=_truncate(txt),
+        )
     except Exception as e:
         logger.warning("vLLM models GET failed: %s", e)
-        return None
+        return VllmCallResult(ok=False, url=url, error=type(e).__name__ + ": " + str(e))
 
 
 async def chat_completion(
@@ -52,7 +86,7 @@ async def chat_completion(
     timeout_sec: float = DEFAULT_CHAT_TIMEOUT_SEC,
     max_tokens: int | None = 512,
     temperature: float = 0.2,
-) -> dict[str, Any] | None:
+) -> VllmCallResult:
     url = chat_completions_url(openai_base)
     body: dict[str, Any] = {
         "model": model,
@@ -62,13 +96,29 @@ async def chat_completion(
     if max_tokens is not None:
         body["max_tokens"] = max_tokens
     try:
-        async with httpx.AsyncClient(timeout=timeout_sec) as client:
+        async with httpx.AsyncClient(timeout=timeout_sec, follow_redirects=True) as client:
             r = await client.post(url, headers=_headers(api_key), json=body)
-            r.raise_for_status()
-            return r.json()
+            if r.status_code >= 400:
+                return VllmCallResult(
+                    ok=False,
+                    url=url,
+                    status_code=r.status_code,
+                    error=f"HTTP {r.status_code}",
+                    body_preview=_truncate(r.text),
+                )
+            return VllmCallResult(ok=True, data=r.json(), url=url, status_code=r.status_code)
+    except httpx.HTTPStatusError as e:
+        txt = e.response.text if e.response is not None else ""
+        return VllmCallResult(
+            ok=False,
+            url=url,
+            status_code=e.response.status_code if e.response else None,
+            error=str(e),
+            body_preview=_truncate(txt),
+        )
     except Exception as e:
         logger.warning("vLLM chat/completions failed: %s", e)
-        return None
+        return VllmCallResult(ok=False, url=url, error=type(e).__name__ + ": " + str(e))
 
 
 def extract_assistant_text(response: dict[str, Any] | None) -> str | None:
@@ -81,4 +131,13 @@ def extract_assistant_text(response: dict[str, Any] | None) -> str | None:
     content = msg.get("content")
     if isinstance(content, str):
         return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text")
+                if isinstance(t, str):
+                    parts.append(t)
+        if parts:
+            return "".join(parts)
     return None

@@ -19,14 +19,14 @@ All processed video runs are logged with **timestamp + frame index + event paylo
 - **Worker**: `ffprobe` metadata, chunk plan (~60s windows), then **remote vLLM**:
   - `GET …/models` (optional probe)
   - **`POST …/chat/completions`** — phase 1 uses a **text-only** summary of probe + chunk plan (multimodal clips next)  
-- **Docker Compose**: **`overwatch-api` only** by default, calling **`https://vllm-video-api.dwani.ai/ai/v1`**. Local GPU vLLM is optional (`--profile local-vllm`).
+- **Docker Compose**: **`overwatch-api` only** by default, calling **`https://vllm-video-api.dwani.ai/v1`**. Local GPU vLLM is optional (`--profile local-vllm`).
 
 ## Remote vLLM (phase 1)
 
 `VLLM_BASE_URL` must be the **OpenAI-compatible prefix** immediately before `/chat/completions`.
 
-Default: **`https://vllm-video-api.dwani.ai/ai/v1`** → requests go to  
-`https://vllm-video-api.dwani.ai/ai/v1/chat/completions` and `…/models`.
+Default: **`https://vllm-video-api.dwani.ai/v1`** (with or without a trailing `/`) → requests go to  
+`https://vllm-video-api.dwani.ai/v1/chat/completions` and `…/v1/models`.
 
 If your gateway uses a different layout, override `VLLM_BASE_URL` accordingly.
 
@@ -39,7 +39,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 export DATA_DIR=./data/overwatch INGEST_DIR=./data/ingest
-export VLLM_BASE_URL=https://vllm-video-api.dwani.ai/ai/v1
+export VLLM_BASE_URL=https://vllm-video-api.dwani.ai/v1
 export VLLM_MODEL=gemma4
 # export VLLM_API_KEY=...   # if required
 PYTHONPATH=src uvicorn overwatch.main:app --reload --port 8080
@@ -56,7 +56,23 @@ docker compose up --build
 ```
 
 - Overwatch: `http://localhost:8080/v1/health`  
-- Remote vLLM: `https://vllm-video-api.dwani.ai/ai/v1` (no local GPU in default compose)
+- Remote vLLM: `https://vllm-video-api.dwani.ai/v1` (no local GPU in default compose)
+
+**Creating a job from the host (Docker):** paths inside the container are **not** the same as on your laptop. The compose file mounts host `./data/ingest` at **`/data/ingest`** in the container. Use either:
+
+```bash
+# Easiest: basename only (resolved under INGEST_DIR in the container)
+curl -s -X POST 'http://localhost:8080/v1/jobs' \
+  -H 'Content-Type: application/json' \
+  -d '{"filename":"warehouse-1.mp4"}'
+
+# Or the full path *as seen inside the container*
+curl -s -X POST 'http://localhost:8080/v1/jobs' \
+  -H 'Content-Type: application/json' \
+  -d '{"source_path":"/data/ingest/warehouse-1.mp4"}'
+```
+
+Do **not** pass host paths like `/home/you/.../data/ingest/foo.mp4` — the API will reject them.
 
 **Local GPU vLLM** (optional):
 
@@ -86,7 +102,7 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 | `INGEST_POLL_INTERVAL_SEC` | `5` | Folder scan interval |
 | `INGEST_STABLE_SEC` | `2` | File size+mtime must be unchanged this long |
 | `INGEST_EXTENSIONS` | `.mp4,.mkv,...` | Allowed suffixes |
-| `VLLM_BASE_URL` | `https://vllm-video-api.dwani.ai/ai/v1` | Prefix before `/chat/completions` |
+| `VLLM_BASE_URL` | `https://vllm-video-api.dwani.ai/v1` | Prefix before `/chat/completions` |
 | `VLLM_MODEL` | `gemma4` | Model id for chat completions |
 | `VLLM_API_KEY` | _(unset)_ | `Authorization: Bearer …` if required |
 | `VLLM_CHAT_TIMEOUT_SEC` | `120` | HTTP timeout for chat completions |

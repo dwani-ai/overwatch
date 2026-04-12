@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 def utc_now() -> datetime:
@@ -32,9 +32,29 @@ class AgentTrack(str, Enum):
 
 
 class JobCreate(BaseModel):
-    """Enqueue a file-backed job (path must exist and be readable)."""
+    """
+    Enqueue a file-backed job. Provide **exactly one** of:
 
-    source_path: str = Field(..., description="Absolute path to a video file inside the container/host mount.")
+    - ``filename`` — basename only; resolved as ``INGEST_DIR / filename`` (best for Docker: use e.g. ``warehouse-1.mp4``).
+    - ``source_path`` — absolute path **inside the same environment as the API** (in Docker: under ``/data/ingest/...``, not the host path).
+    """
+
+    source_path: str | None = Field(
+        default=None,
+        description="Absolute path under INGEST_DIR (container path when using Docker).",
+    )
+    filename: str | None = Field(
+        default=None,
+        description="Single file name inside INGEST_DIR (no slashes).",
+    )
+
+    @model_validator(mode="after")
+    def exactly_one_source(self) -> JobCreate:
+        has_path = self.source_path is not None and str(self.source_path).strip() != ""
+        has_name = self.filename is not None and str(self.filename).strip() != ""
+        if has_path == has_name:
+            raise ValueError("Provide exactly one of 'filename' or 'source_path'")
+        return self
 
 
 class JobRecord(BaseModel):

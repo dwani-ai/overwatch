@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from overwatch.config import Settings
 from overwatch.models import JobCreate, JobRecord, SourceType
 from overwatch.store import JobStore
 
@@ -59,17 +60,47 @@ async def get_job_events(job_id: str, store: StoreDep) -> list[dict]:
     ]
 
 
-@router.post("/jobs", response_model=JobRecord, status_code=status.HTTP_201_CREATED)
-async def create_job(body: JobCreate, request: Request, store: StoreDep) -> JobRecord:
-    settings = request.app.state.settings
-    path = Path(body.source_path).resolve()
+def _ingest_root(settings: Settings) -> Path:
+    return settings.ingest_dir.expanduser().resolve()
+
+
+def _reject_not_under_ingest(path: Path, ingest_root: Path) -> None:
     try:
-        path.relative_to(settings.ingest_dir.resolve())
+        path.relative_to(ingest_root)
     except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="source_path must be under INGEST_DIR",
-        )
+            detail=(
+                "Path must be under INGEST_DIR. "
+                "In Docker, INGEST_DIR is usually /data/ingest — use e.g. "
+                '"/data/ingest/video.mp4" or POST {"filename":"video.mp4"} instead of a host path '
+                "like /home/..."
+            ),
+        ) from None
+
+
+@router.post("/jobs", response_model=JobRecord, status_code=status.HTTP_201_CREATED)
+async def create_job(body: JobCreate, request: Request, store: StoreDep) -> JobRecord:
+    settings = request.app.state.settings
+    ingest_root = _ingest_root(settings)
+
+    if body.filename is not None and str(body.filename).strip():
+        fn = str(body.filename).strip()
+        if "/" in fn or "\\" in fn or fn in (".", "..") or ".." in fn:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="filename must be a single file name (no path separators)",
+            )
+        path = (ingest_root / fn).resolve()
+        if not path.is_relative_to(ingest_root):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid filename for INGEST_DIR",
+            )
+    else:
+        path = Path(str(body.source_path).strip()).expanduser().resolve()
+        _reject_not_under_ingest(path, ingest_root)
+
     if not path.is_file():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File does not exist")
 
