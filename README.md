@@ -18,10 +18,14 @@ All processed video runs are logged with **timestamp + frame index + event paylo
   - **Synthesis** — cross-chunk narrative and recommended actions (`agent_synthesis` event).
   - **Risk review** — safety / security triage (`agent_risk_review` event).
   - **Incident brief** — short handoff narrative and follow-ups (`agent_incident_brief` event).
-  - **Async queue:** **`POST /v1/jobs/{id}/agent-runs`** with body `{"agent":"synthesis"|"risk_review"|"incident_brief","force":?}` returns **202** and a **`run_id`**; poll **`GET /v1/agent-runs/{run_id}`** until `status` is `completed` or `failed`. A background **agent worker** (started with the API) drains the queue and still appends **orchestrator** events for audit. Stale `processing` rows (e.g. after a crash) are marked **failed** periodically.
-  - **Orchestrated flow (linear):** **`POST /v1/jobs/{id}/agent-runs/orchestrate`** with body `{"steps":["synthesis","risk_review","incident_brief"], "force":?}` returns **202** with **`orchestration_id`** and **`head_run_id`**. Poll **`GET /v1/agent-orchestrations/{orchestration_id}`** until `status` is `completed` or `failed`; each step enqueues the next automatically on success. Only one **running** orchestration per job (**409** if a second is started). List past runs: **`GET /v1/jobs/{id}/agent-orchestrations`**. The UI includes **Run full pipeline** on the job results view.
+  - **Compliance brief** — cross-industry SOP / safety alignment from the summary (`agent_compliance_brief`).
+  - **Loss prevention** — retail / logistics behavioural narrative without identities (`agent_loss_prevention`).
+  - **Perimeter chain** — ordered boundary / access storyline (`agent_perimeter_chain`).
+  - **Privacy review** — identity-inference and sensitive-descriptor risks in the structured summary (`agent_privacy_review`).
+  - **Async queue:** **`POST /v1/jobs/{id}/agent-runs`** with body `{"agent": "<kind>","force":?}` where `<kind>` is one of **`synthesis`**, **`risk_review`**, **`incident_brief`**, **`compliance_brief`**, **`loss_prevention`**, **`perimeter_chain`**, **`privacy_review`**. Returns **202** and **`run_id`**; poll **`GET /v1/agent-runs/{run_id}`** until `status` is `completed` or `failed`. A background **agent worker** drains the queue and appends **orchestrator** events. Stale `processing` rows are marked **failed** periodically.
+  - **Orchestrated flow (linear):** **`POST /v1/jobs/{id}/agent-runs/orchestrate`** with body `{"steps":[...], "force":?}` (up to 24 kinds; e.g. core three or the full seven cross-industry agents) returns **202** with **`orchestration_id`** and **`head_run_id`**. Poll **`GET /v1/agent-orchestrations/{orchestration_id}`** until `status` is `completed` or `failed`; each step enqueues the next automatically on success. Only one **running** orchestration per job (**409** if a second is started). List past runs: **`GET /v1/jobs/{id}/agent-orchestrations`**. The UI includes **core (3)** and **cross-industry (7)** pipeline buttons.
   - **Blocking synthesis** (optional): **`POST /v1/jobs/{id}/agents/synthesis?blocking=true`** waits for the LLM in-process (legacy / scripts).
-  - **Latest by kind:** **`GET …/agents/synthesis`**, **`GET …/agents/risk-review`**, and **`GET …/agents/incident-brief`** return the newest stored event payload. The web UI runs agents via the async API and polls.  
+  - **Latest by kind:** **`GET …/agents/synthesis`**, **`…/risk-review`**, **`…/incident-brief`**, **`…/compliance-brief`**, **`…/loss-prevention`**, **`…/perimeter-chain`**, **`…/privacy-review`** return the newest stored event payload. The web UI can run a **core (3)** or **cross-industry (7)** orchestrated pipeline.  
 - **Web UI** (Vite + React): upload a video and poll for job status + summary (`frontend/`; Docker **`overwatch-ui`** publishes the gateway on host port **80**)  
 - **SQLite** job + event store under `DATA_DIR`; jobs include **`summary_json`** (aggregated structured analysis)  
 - **Folder ingest**: poll `INGEST_DIR` for new video files; stable-write detection (`INGEST_STABLE_SEC`)  
@@ -129,7 +133,7 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 | `VLLM_CHUNK_MAX_TOKENS` | `1024` | Max completion tokens for **observe** (multimodal JSON) |
 | `VLLM_JSON_RETRY_MAX` | `2` | JSON parse repair rounds per LLM step |
 | `VLLM_SPECIALIST_MAX_TOKENS` | `800` | Max tokens per **text specialist** call |
-| `VLLM_AGENT_MAX_TOKENS` | `2048` | Max tokens for job-level text agents (synthesis, risk review, incident brief) |
+| `VLLM_AGENT_MAX_TOKENS` | `2048` | Max tokens for job-level text agents (all seven kinds + any future agents) |
 | `VLLM_AGENT_TIMEOUT_SEC` | `120` | HTTP timeout for job-level text agent chat completions |
 | `MAX_UPLOAD_BYTES` | `536870912` | Multipart upload cap (default 512 MiB; align with reverse proxy `client_max_body_size`) |
 | `AGENT_RUN_STALE_SEC` | `900` | Agent runs stuck in `processing` longer than this are marked failed (worker restart / hang) |
@@ -153,7 +157,7 @@ Set `VLLM_BASE_URL=` empty to skip all vLLM calls (probe + chat).
 - `POST /v1/jobs/{id}/agent-runs/orchestrate` → sequential multi-agent run (**202** + `orchestration_id`, `head_run_id`); `GET /v1/agent-orchestrations/{orchestration_id}` → pipeline status; `GET /v1/jobs/{id}/agent-orchestrations` → history  
 - `GET /v1/jobs/{id}/agent-runs` → recent runs for that job  
 - `POST /v1/jobs/{id}/agents/synthesis?blocking=true` → blocking synthesis; without `blocking`, **202** + async queue (same as `agent-runs` with `synthesis`)  
-- `GET /v1/jobs/{id}/agents/synthesis` / **`…/agents/risk-review`** / **`…/agents/incident-brief`** → latest stored event payload  
+- `GET /v1/jobs/{id}/agents/synthesis` / **`…/risk-review`** / **`…/incident-brief`** / **`…/compliance-brief`** / **`…/loss-prevention`** / **`…/perimeter-chain`** / **`…/privacy-review`** → latest stored event payload  
 
 **Observe multimodal format:** [`chunk_video_user_messages`](src/overwatch/vllm_client.py) — `text` + `video_url` (`data:video/mp4;base64,...`). Structured parsing lives in [`analysis/chunk_pipeline.py`](src/overwatch/analysis/chunk_pipeline.py) and [`analysis/json_extract.py`](src/overwatch/analysis/json_extract.py).
 

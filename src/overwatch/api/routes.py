@@ -8,7 +8,11 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
+from overwatch.agents.compliance_brief import AGENT_COMPLIANCE_BRIEF_EVENT
 from overwatch.agents.incident_brief import AGENT_INCIDENT_BRIEF_EVENT
+from overwatch.agents.loss_prevention import AGENT_LOSS_PREVENTION_EVENT
+from overwatch.agents.perimeter_chain import AGENT_PERIMETER_CHAIN_EVENT
+from overwatch.agents.privacy_review import AGENT_PRIVACY_REVIEW_EVENT
 from overwatch.agents.risk_review import AGENT_RISK_REVIEW_EVENT
 from overwatch.agents.synthesis import AGENT_SYNTHESIS_EVENT, run_synthesis_agent
 from overwatch.config import Settings
@@ -123,6 +127,35 @@ def _agent_orch_public_dict(o: AgentOrchestrationOut) -> dict:
         "error": o.error,
         "created_at": o.created_at.isoformat(),
         "updated_at": o.updated_at.isoformat(),
+    }
+
+
+async def _get_latest_agent_event_payload(
+    store: JobStore,
+    job_id: str,
+    *,
+    event_type: str,
+    not_found_detail: str,
+) -> dict:
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    ev = await store.get_latest_event(
+        job_id,
+        agent=AgentTrack.orchestrator,
+        event_type=event_type,
+    )
+    if ev is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=not_found_detail)
+    return {
+        "event_id": ev.id,
+        "observed_at": ev.observed_at.isoformat(),
+        "result": ev.payload.get("result"),
+        "error": ev.payload.get("error"),
+        "attempts": ev.payload.get("attempts"),
+        "truncated_input": ev.payload.get("truncated_input"),
+        "model": ev.payload.get("model"),
     }
 
 
@@ -338,29 +371,52 @@ async def get_job_risk_review(job_id: str, store: StoreDep) -> dict:
 @router.get("/jobs/{job_id}/agents/incident-brief")
 async def get_job_incident_brief(job_id: str, store: StoreDep) -> dict:
     """Return the latest stored **incident brief** agent output for this job, if any."""
-    try:
-        await store.get_job(job_id)
-    except KeyError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    ev = await store.get_latest_event(
+    return await _get_latest_agent_event_payload(
+        store,
         job_id,
-        agent=AgentTrack.orchestrator,
         event_type=AGENT_INCIDENT_BRIEF_EVENT,
+        not_found_detail="No incident brief run yet. POST /v1/jobs/{id}/agent-runs with agent=incident_brief.",
     )
-    if ev is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No incident brief run yet. POST /v1/jobs/{id}/agent-runs with agent=incident_brief.",
-        )
-    return {
-        "event_id": ev.id,
-        "observed_at": ev.observed_at.isoformat(),
-        "result": ev.payload.get("result"),
-        "error": ev.payload.get("error"),
-        "attempts": ev.payload.get("attempts"),
-        "truncated_input": ev.payload.get("truncated_input"),
-        "model": ev.payload.get("model"),
-    }
+
+
+@router.get("/jobs/{job_id}/agents/compliance-brief")
+async def get_job_compliance_brief(job_id: str, store: StoreDep) -> dict:
+    return await _get_latest_agent_event_payload(
+        store,
+        job_id,
+        event_type=AGENT_COMPLIANCE_BRIEF_EVENT,
+        not_found_detail="No compliance brief run yet. POST /v1/jobs/{id}/agent-runs with agent=compliance_brief.",
+    )
+
+
+@router.get("/jobs/{job_id}/agents/loss-prevention")
+async def get_job_loss_prevention(job_id: str, store: StoreDep) -> dict:
+    return await _get_latest_agent_event_payload(
+        store,
+        job_id,
+        event_type=AGENT_LOSS_PREVENTION_EVENT,
+        not_found_detail="No loss prevention run yet. POST /v1/jobs/{id}/agent-runs with agent=loss_prevention.",
+    )
+
+
+@router.get("/jobs/{job_id}/agents/perimeter-chain")
+async def get_job_perimeter_chain(job_id: str, store: StoreDep) -> dict:
+    return await _get_latest_agent_event_payload(
+        store,
+        job_id,
+        event_type=AGENT_PERIMETER_CHAIN_EVENT,
+        not_found_detail="No perimeter chain run yet. POST /v1/jobs/{id}/agent-runs with agent=perimeter_chain.",
+    )
+
+
+@router.get("/jobs/{job_id}/agents/privacy-review")
+async def get_job_privacy_review(job_id: str, store: StoreDep) -> dict:
+    return await _get_latest_agent_event_payload(
+        store,
+        job_id,
+        event_type=AGENT_PRIVACY_REVIEW_EVENT,
+        not_found_detail="No privacy review run yet. POST /v1/jobs/{id}/agent-runs with agent=privacy_review.",
+    )
 
 
 @router.post("/jobs/{job_id}/agents/synthesis")

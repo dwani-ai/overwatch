@@ -86,7 +86,14 @@ export async function getSummary(id: string): Promise<Record<string, unknown>> {
   return r.json();
 }
 
-export type AgentKind = "synthesis" | "risk_review" | "incident_brief";
+export type AgentKind =
+  | "synthesis"
+  | "risk_review"
+  | "incident_brief"
+  | "compliance_brief"
+  | "loss_prevention"
+  | "perimeter_chain"
+  | "privacy_review";
 
 export type AgentRunPublic = {
   id: string;
@@ -145,6 +152,17 @@ export async function listJobAgentRuns(
 
 /** Default linear pipeline: context → risk → handoff brief. */
 export const DEFAULT_AGENT_PIPELINE: AgentKind[] = ["synthesis", "risk_review", "incident_brief"];
+
+/** All cross-industry job agents in a single ordered run (longer / costlier). */
+export const CROSS_INDUSTRY_AGENT_PIPELINE: AgentKind[] = [
+  "synthesis",
+  "risk_review",
+  "incident_brief",
+  "compliance_brief",
+  "loss_prevention",
+  "perimeter_chain",
+  "privacy_review",
+];
 
 export type AgentOrchestrationPublic = {
   id: string;
@@ -252,6 +270,40 @@ export type IncidentBriefResult = {
   suggested_followups: string[];
 };
 
+export type ComplianceBriefResult = {
+  schema_version: string;
+  overall_alignment: string;
+  observed_practices: string[];
+  gaps_or_concerns: string[];
+  recommended_verifications: string[];
+  notes: string;
+};
+
+export type LossPreventionResult = {
+  schema_version: string;
+  narrative: string;
+  behavioral_observations: string[];
+  risk_level: string;
+  suggested_actions: string[];
+};
+
+export type PerimeterChainResult = {
+  schema_version: string;
+  chain_narrative: string;
+  key_events: string[];
+  zones_or_segments: string[];
+  follow_up_checks: string[];
+};
+
+export type PrivacyReviewResult = {
+  schema_version: string;
+  overall_privacy_risk: string;
+  identity_inference_risks: string[];
+  sensitive_descriptors: string[];
+  safe_output_guidance: string[];
+  summary: string;
+};
+
 export type AgentEventPayload = {
   event_id: number;
   observed_at: string;
@@ -276,6 +328,30 @@ export async function getRiskReview(jobId: string): Promise<AgentEventPayload> {
 
 export async function getIncidentBrief(jobId: string): Promise<AgentEventPayload> {
   const r = await apiFetch(`/jobs/${jobId}/agents/incident-brief`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getComplianceBrief(jobId: string): Promise<AgentEventPayload> {
+  const r = await apiFetch(`/jobs/${jobId}/agents/compliance-brief`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getLossPrevention(jobId: string): Promise<AgentEventPayload> {
+  const r = await apiFetch(`/jobs/${jobId}/agents/loss-prevention`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getPerimeterChain(jobId: string): Promise<AgentEventPayload> {
+  const r = await apiFetch(`/jobs/${jobId}/agents/perimeter-chain`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getPrivacyReview(jobId: string): Promise<AgentEventPayload> {
+  const r = await apiFetch(`/jobs/${jobId}/agents/privacy-review`);
   if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
   return r.json();
 }

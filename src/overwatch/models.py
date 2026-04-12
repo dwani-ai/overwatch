@@ -282,10 +282,87 @@ class IncidentBriefAgentResult(BaseModel):
     )
 
 
+class ComplianceBriefAgentResult(BaseModel):
+    """Generic SOP / safety-alignment read across industries (warehouse, retail, plant, office)."""
+
+    schema_version: Literal["1"] = "1"
+    overall_alignment: Literal["aligned", "partial", "unclear", "concerns"] = "unclear"
+    observed_practices: list[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description="Behaviours or conditions that appear consistent with common procedures.",
+    )
+    gaps_or_concerns: list[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description="Possible procedure gaps or hazards **only** if supported by the JSON.",
+    )
+    recommended_verifications: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+        description="On-site checks an auditor or supervisor might do.",
+    )
+    notes: str = Field(default="", description="Short neutral summary for compliance handoff.")
+
+
+class LossPreventionAgentResult(BaseModel):
+    """Retail / logistics LP-style narrative without identities."""
+
+    schema_version: Literal["1"] = "1"
+    narrative: str = Field(default="", description="Sequence-oriented LP narrative (no names, no IDs).")
+    behavioral_observations: list[str] = Field(default_factory=list, max_length=14)
+    risk_level: Literal["low", "medium", "high", "unknown"] = "unknown"
+    suggested_actions: list[str] = Field(default_factory=list, max_length=10)
+
+
+class PerimeterChainAgentResult(BaseModel):
+    """Ordered boundary / access storyline (sites, campuses, warehouses, utilities)."""
+
+    schema_version: Literal["1"] = "1"
+    chain_narrative: str = Field(
+        default="",
+        description="What happened along perimeter, entries, or access-relevant areas in order.",
+    )
+    key_events: list[str] = Field(default_factory=list, max_length=14)
+    zones_or_segments: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+        description="Generic area labels as inferred from scene text (e.g. dock, gate, lobby).",
+    )
+    follow_up_checks: list[str] = Field(default_factory=list, max_length=10)
+
+
+class PrivacyReviewAgentResult(BaseModel):
+    """Review structured summary text for identity / sensitive-inference risks in downstream use."""
+
+    schema_version: Literal["1"] = "1"
+    overall_privacy_risk: Literal["low", "medium", "high", "unknown"] = "unknown"
+    identity_inference_risks: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+        description="Ways the descriptions could enable re-identification if combined with other data.",
+    )
+    sensitive_descriptors: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+        description="Categories of sensitive attributes **appearing in the input** (not invented).",
+    )
+    safe_output_guidance: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+        description="Concrete guidance for external reporting or retention.",
+    )
+    summary: str = Field(default="", description="2–4 sentences for privacy / DPO handoff.")
+
+
 class AgentKind(str, Enum):
     synthesis = "synthesis"
     risk_review = "risk_review"
     incident_brief = "incident_brief"
+    compliance_brief = "compliance_brief"
+    loss_prevention = "loss_prevention"
+    perimeter_chain = "perimeter_chain"
+    privacy_review = "privacy_review"
 
 
 class AgentRunStatus(str, Enum):
@@ -311,8 +388,8 @@ class AgentOrchestrateCreate(BaseModel):
     steps: list[AgentKind] = Field(
         ...,
         min_length=1,
-        max_length=16,
-        description="Ordered agent kinds (e.g. synthesis → risk_review → incident_brief).",
+        max_length=24,
+        description="Ordered agent kinds (e.g. full cross-industry suite).",
     )
     force: bool = Field(
         default=False,
