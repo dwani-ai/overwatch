@@ -237,3 +237,54 @@ class SynthesisAgentResult(BaseModel):
         max_length=12,
         description="Concrete next steps for review or follow-up.",
     )
+
+
+class RiskReviewAgentResult(BaseModel):
+    """Security / operational risk triage from the job summary JSON (no new video)."""
+
+    schema_version: Literal["1"] = "1"
+    overall_risk: Literal["low", "medium", "high", "unknown"] = "unknown"
+    requires_immediate_review: bool = False
+    risk_factors: list[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description="Concrete concerns grounded in chunk-level signals.",
+    )
+    operator_notes: str = Field(
+        default="",
+        description="Short guidance for a human reviewer (2–4 sentences).",
+    )
+    mitigations_suggested: list[str] = Field(default_factory=list, max_length=12)
+
+
+class AgentKind(str, Enum):
+    synthesis = "synthesis"
+    risk_review = "risk_review"
+
+
+class AgentRunStatus(str, Enum):
+    pending = "pending"
+    processing = "processing"
+    completed = "completed"
+    failed = "failed"
+
+
+class AgentRunCreate(BaseModel):
+    agent: AgentKind
+    force: bool = False
+
+
+class AgentRunOut(BaseModel):
+    """Persisted async agent invocation (queue row + optional result)."""
+
+    id: str
+    job_id: str
+    agent: AgentKind
+    status: AgentRunStatus
+    force: bool = False
+    created_at: datetime
+    updated_at: datetime
+    error: str | None = None
+    result: dict[str, Any] | None = None
+    event_id: int | None = None
+    meta: dict[str, Any] = Field(default_factory=dict)

@@ -14,7 +14,12 @@ All processed video runs are logged with **timestamp + frame index + event paylo
 ## What is implemented (v0)
 
 - **Overwatch API**: `GET /v1/health`, `GET/POST /v1/jobs`, **`POST /v1/jobs/upload`** (multipart video), **`GET /v1/jobs/{id}/summary`**, **`GET /v1/jobs/{id}/events`** (paginated; `legacy=true` for full list)  
-- **Agents (v0):** **`POST /v1/jobs/{id}/agents/synthesis`** runs a **synthesis** orchestrator (text-only LLM over the job summary JSON). **`GET`** the same path returns the latest stored run. Output is appended as an event (`agent`=`orchestrator`, `event_type`=`agent_synthesis`). The web UI exposes this under **Results** for completed jobs.  
+- **Agents (v0):** Job-level text agents over the stored **summary** JSON (same vLLM as the pipeline):
+  - **Synthesis** — cross-chunk narrative and recommended actions (`agent_synthesis` event).
+  - **Risk review** — safety / security triage (`agent_risk_review` event).
+  - **Async queue:** **`POST /v1/jobs/{id}/agent-runs`** with body `{"agent":"synthesis"|"risk_review","force":?}` returns **202** and a **`run_id`**; poll **`GET /v1/agent-runs/{run_id}`** until `status` is `completed` or `failed`. A background **agent worker** (started with the API) drains the queue and still appends **orchestrator** events for audit.
+  - **Blocking synthesis** (optional): **`POST /v1/jobs/{id}/agents/synthesis?blocking=true`** waits for the LLM in-process (legacy / scripts).
+  - **Latest by kind:** **`GET …/agents/synthesis`** and **`GET …/agents/risk-review`** return the newest stored event payload. The web UI runs agents via the async API and polls.  
 - **Web UI** (Vite + React): upload a video and poll for job status + summary (`frontend/`; Docker **`overwatch-ui`** publishes the gateway on host port **80**)  
 - **SQLite** job + event store under `DATA_DIR`; jobs include **`summary_json`** (aggregated structured analysis)  
 - **Folder ingest**: poll `INGEST_DIR` for new video files; stable-write detection (`INGEST_STABLE_SEC`)  
@@ -127,6 +132,7 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 | `VLLM_VIDEO_SCALE_WIDTH` | `480` | FFmpeg scale width before upload |
 | `VLLM_SEGMENT_INCLUDE_AUDIO` | `true` | AAC in segment; retries video-only if ffmpeg fails |
 | `WORKER_POLL_INTERVAL_SEC` | `1` | Worker idle sleep |
+| `AGENT_WORKER_POLL_INTERVAL_SEC` | `0.4` | Sleep when the agent run queue is empty |
 | `CORS_ORIGINS` | `http://localhost:5173,...` | Comma-separated browser origins for the API; use `*` to allow all (dev only). Needed when the UI origin differs from the API (e.g. Vite on 5173). The Compose gateway on port 80 uses same-origin `/api` and does not rely on CORS. |
 
 Set `VLLM_BASE_URL=` empty to skip all vLLM calls (probe + chat).
@@ -137,7 +143,10 @@ Set `VLLM_BASE_URL=` empty to skip all vLLM calls (probe + chat).
 - `GET /v1/jobs/{id}/events?legacy=true` → full array (large jobs)  
 - `GET /v1/jobs/{id}/summary` → aggregated `chunk_analyses` after the job completes  
 - `GET /v1/jobs/{id}` includes `summary` when present  
-- `POST /v1/jobs/{id}/agents/synthesis` → run synthesis agent (`force=true` to ignore cache); `GET` → latest stored payload  
+- `POST /v1/jobs/{id}/agent-runs` → queue agent run (**202** + `run_id`); `GET /v1/agent-runs/{run_id}` → status and `result`  
+- `GET /v1/jobs/{id}/agent-runs` → recent runs for that job  
+- `POST /v1/jobs/{id}/agents/synthesis?blocking=true` → blocking synthesis; without `blocking`, **202** + async queue (same as `agent-runs` with `synthesis`)  
+- `GET /v1/jobs/{id}/agents/synthesis` / **`…/agents/risk-review`** → latest stored event payload  
 
 **Observe multimodal format:** [`chunk_video_user_messages`](src/overwatch/vllm_client.py) — `text` + `video_url` (`data:video/mp4;base64,...`). Structured parsing lives in [`analysis/chunk_pipeline.py`](src/overwatch/analysis/chunk_pipeline.py) and [`analysis/json_extract.py`](src/overwatch/analysis/json_extract.py).
 

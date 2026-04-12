@@ -11,6 +11,7 @@ from overwatch import __version__
 from overwatch.api.routes import router
 from overwatch.config import Settings
 from overwatch.ingest.folder import FolderIngest
+from overwatch.agents.runner import agent_worker_loop
 from overwatch.store import open_store
 from overwatch.worker import worker_loop
 
@@ -58,7 +59,10 @@ async def lifespan(app: FastAPI):
     stop.set()
     ingest_task.cancel()
     worker_task.cancel()
-    await asyncio.gather(ingest_task, worker_task, return_exceptions=True)
+    agent_worker_task.cancel()
+    await asyncio.gather(
+        ingest_task, worker_task, agent_worker_task, return_exceptions=True
+    )
     await conn.close()
 
 

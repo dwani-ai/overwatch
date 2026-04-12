@@ -1,6 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
-import type { JobRecord, SynthesisResult } from "./api";
-import { getJob, getSummary, getSynthesis, postSynthesis, uploadVideo } from "./api";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import type { AgentKind, JobRecord, RiskReviewResult, SynthesisResult } from "./api";
+import {
+  createAgentRun,
+  getJob,
+  getRiskReview,
+  getSummary,
+  getSynthesis,
+  pollAgentRun,
+  uploadVideo,
+} from "./api";
 import "./App.css";
 
 function sleep(ms: number) {
@@ -121,7 +129,7 @@ function SummaryView({ jobId, data }: { jobId: string | null; data: Record<strin
       <p className="muted">
         {String(data.analysed_chunk_count ?? 0)} / {String(data.planned_chunk_count ?? "?")} chunks
       </p>
-      {jobId ? <SynthesisPanel jobId={jobId} /> : null}
+      {jobId ? <AgentsPanel jobId={jobId} /> : null}
       {Array.isArray(chunks) && chunks.length > 0 ? (
         <ul className="chunk-list">
           {chunks.map((c, i) => (
@@ -137,9 +145,43 @@ function SummaryView({ jobId, data }: { jobId: string | null; data: Record<strin
   );
 }
 
-function SynthesisPanel({ jobId }: { jobId: string }) {
-  const [result, setResult] = useState<SynthesisResult | null>(null);
-  const [meta, setMeta] = useState<{ cached?: boolean; observed_at?: string; error?: string | null }>({});
+function AgentsPanel({ jobId }: { jobId: string }) {
+  return (
+    <div className="agents-panel">
+      <AgentAsyncBlock
+        jobId={jobId}
+        agent="synthesis"
+        title="Synthesis agent"
+        blurb="Cross-chunk narrative from the job JSON. Runs asynchronously; results are stored as events."
+        render={(r) => <SynthesisBody result={r as SynthesisResult} />}
+      />
+      <AgentAsyncBlock
+        jobId={jobId}
+        agent="risk_review"
+        title="Risk review agent"
+        blurb="Safety and security triage from the same summary (async queue)."
+        render={(r) => <RiskReviewBody result={r as RiskReviewResult} />}
+      />
+    </div>
+  );
+}
+
+function AgentAsyncBlock({
+  jobId,
+  agent,
+  title,
+  blurb,
+  render,
+}: {
+  jobId: string;
+  agent: AgentKind;
+  title: string;
+  blurb: string;
+  render: (result: Record<string, unknown>) => ReactNode;
+}) {
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [observedAt, setObservedAt] = useState<string | null>(null);
+  const [phase, setPhase] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -147,10 +189,11 @@ function SynthesisPanel({ jobId }: { jobId: string }) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await getSynthesis(jobId);
-        if (cancelled) return;
-        if (r.result) setResult(r.result);
-        setMeta({ observed_at: r.observed_at, error: r.error ?? null });
+        const r =
+          agent === "synthesis" ? await getSynthesis(jobId) : await getRiskReview(jobId);
+        if (cancelled || !r.result) return;
+        setResult(r.result as Record<string, unknown>);
+        setObservedAt(r.observed_at);
       } catch {
         /* no prior run */
       }
@@ -158,64 +201,91 @@ function SynthesisPanel({ jobId }: { jobId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [jobId]);
+  }, [jobId, agent]);
 
   const run = async (force: boolean) => {
     setErr(null);
+    setPhase("");
     setBusy(true);
     try {
-      const r = await postSynthesis(jobId, force);
-      if (r.result) setResult(r.result);
-      setMeta({
-        cached: r.cached,
-        observed_at: r.observed_at,
-        error: r.error ?? null,
-      });
+      const q = await createAgentRun(jobId, agent, force);
+      setPhase(`Queued (${q.run_id.slice(0, 8)}…)`);
+      const done = await pollAgentRun(q.run_id);
+      if (done.status === "failed") {
+        setErr(done.error || "Agent run failed");
+        setResult(null);
+        setObservedAt(done.updated_at);
+        return;
+      }
+      if (done.result) {
+        setResult(done.result);
+        setObservedAt(done.updated_at);
+      }
+      if (done.meta?.cached) setPhase("Served from cache (no new LLM call).");
+      else setPhase("");
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
+      setPhase("");
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="synthesis">
-      <h3 className="synthesis-title">Synthesis agent</h3>
-      <p className="muted small">
-        Cross-chunk summary from the job JSON (text-only LLM). Stored as an event; safe to re-run.
-      </p>
+    <div className="synthesis agent-block">
+      <h3 className="synthesis-title">{title}</h3>
+      <p className="muted small">{blurb}</p>
       <div className="synthesis-actions">
         <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => run(false)}>
-          {busy ? "Running…" : result ? "Refresh from server" : "Run synthesis"}
+          {busy ? "Running…" : result ? "Run again" : "Run"}
         </button>
         <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => run(true)}>
-          Re-run (force)
+          Force re-run
         </button>
       </div>
+      {phase ? <p className="phase">{phase}</p> : null}
       {err ? <p className="error">{err}</p> : null}
-      {meta.cached ? <p className="phase">Served from cache (same job, no new LLM call).</p> : null}
-      {meta.observed_at ? (
-        <p className="muted small">
-          Last run: {meta.observed_at}
-          {meta.error ? <span className="error"> — {meta.error}</span> : null}
-        </p>
-      ) : null}
-      {result ? (
-        <div className="synthesis-body">
-          <p className="scene">{result.executive_summary}</p>
-          {result.attendance_summary ? (
-            <div className="section">
-              <h4>Attendance</h4>
-              <p className="small">{result.attendance_summary}</p>
-            </div>
-          ) : null}
-          <StringList title="Key observations" items={result.key_observations} />
-          <StringList title="Security" items={result.security_highlights} />
-          <StringList title="Logistics" items={result.logistics_highlights} />
-          <StringList title="Recommended actions" items={result.recommended_actions} />
+      {observedAt ? <p className="muted small">Last update: {observedAt}</p> : null}
+      {result ? <div className="synthesis-body">{render(result)}</div> : null}
+    </div>
+  );
+}
+
+function RiskReviewBody({ result }: { result: RiskReviewResult }) {
+  const sev =
+    result.overall_risk === "high"
+      ? "risk-high"
+      : result.overall_risk === "medium"
+        ? "risk-medium"
+        : "risk-low";
+  return (
+    <>
+      <p className={`risk-badge ${sev}`}>
+        Overall risk: <strong>{result.overall_risk}</strong>
+        {result.requires_immediate_review ? " · Immediate review suggested" : null}
+      </p>
+      {result.operator_notes ? <p className="scene">{result.operator_notes}</p> : null}
+      <StringList title="Risk factors" items={result.risk_factors} />
+      <StringList title="Mitigations" items={result.mitigations_suggested} />
+    </>
+  );
+}
+
+function SynthesisBody({ result }: { result: SynthesisResult }) {
+  return (
+    <>
+      <p className="scene">{result.executive_summary}</p>
+      {result.attendance_summary ? (
+        <div className="section">
+          <h4>Attendance</h4>
+          <p className="small">{result.attendance_summary}</p>
         </div>
       ) : null}
-    </div>
+      <StringList title="Key observations" items={result.key_observations} />
+      <StringList title="Security" items={result.security_highlights} />
+      <StringList title="Logistics" items={result.logistics_highlights} />
+      <StringList title="Recommended actions" items={result.recommended_actions} />
+    </>
   );
 }
 

@@ -9,7 +9,16 @@ from typing import Any
 import aiosqlite
 
 from overwatch.db import connect
-from overwatch.models import AgentTrack, EventRecord, JobRecord, JobStatus, SourceType
+from overwatch.models import (
+    AgentKind,
+    AgentRunOut,
+    AgentRunStatus,
+    AgentTrack,
+    EventRecord,
+    JobRecord,
+    JobStatus,
+    SourceType,
+)
 
 
 def _iso(dt: datetime) -> str:
@@ -212,6 +221,126 @@ class JobStore:
             (path, JobStatus.pending.value, JobStatus.processing.value),
         )
         return await cur.fetchone() is not None
+
+    async def create_agent_run(
+        self,
+        job_id: str,
+        *,
+        agent: AgentKind,
+        force: bool = False,
+    ) -> AgentRunOut:
+        run_id = str(uuid.uuid4())
+        now = _iso(datetime.now(timezone.utc))
+        await self._conn.execute(
+            """
+            INSERT INTO agent_runs (id, job_id, agent, status, force_run, created_at, updated_at, error, result_json, event_id, meta_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '{}')
+            """,
+            (
+                run_id,
+                job_id,
+                agent.value,
+                AgentRunStatus.pending.value,
+                1 if force else 0,
+                now,
+                now,
+            ),
+        )
+        await self._conn.commit()
+        row = await self._fetch_agent_run_row(run_id)
+        assert row is not None
+        return self._row_to_agent_run(row)
+
+    async def get_agent_run(self, run_id: str) -> AgentRunOut | None:
+        row = await self._fetch_agent_run_row(run_id)
+        return None if row is None else self._row_to_agent_run(row)
+
+    async def list_agent_runs_for_job(self, job_id: str, *, limit: int = 30) -> list[AgentRunOut]:
+        lim = max(1, min(limit, 100))
+        cur = await self._conn.execute(
+            """
+            SELECT * FROM agent_runs WHERE job_id = ? ORDER BY created_at DESC LIMIT ?
+            """,
+            (job_id, lim),
+        )
+        rows = await cur.fetchall()
+        return [self._row_to_agent_run(r) for r in rows]
+
+    async def claim_next_agent_run(self) -> AgentRunOut | None:
+        """Atomically pick the oldest pending run and mark it ``processing`` (safe with concurrent API workers)."""
+        now = _iso(datetime.now(timezone.utc))
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await self._conn.execute(
+                """
+                UPDATE agent_runs
+                SET status = ?, updated_at = ?
+                WHERE id = (
+                    SELECT id FROM agent_runs
+                    WHERE status = ?
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                )
+                AND status = ?
+                RETURNING *
+                """,
+                (
+                    AgentRunStatus.processing.value,
+                    now,
+                    AgentRunStatus.pending.value,
+                    AgentRunStatus.pending.value,
+                ),
+            )
+            row = await cur.fetchone()
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+        return None if row is None else self._row_to_agent_run(row)
+
+    async def finish_agent_run(
+        self,
+        run_id: str,
+        *,
+        status: AgentRunStatus,
+        result: dict[str, Any] | None = None,
+        error: str | None = None,
+        event_id: int | None = None,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        now = _iso(datetime.now(timezone.utc))
+        meta_json = json.dumps(meta or {})
+        result_json = json.dumps(result) if result is not None else None
+        await self._conn.execute(
+            """
+            UPDATE agent_runs
+            SET status = ?, updated_at = ?, error = ?, result_json = ?, event_id = ?, meta_json = ?
+            WHERE id = ?
+            """,
+            (status.value, now, error, result_json, event_id, meta_json, run_id),
+        )
+        await self._conn.commit()
+
+    async def _fetch_agent_run_row(self, run_id: str) -> aiosqlite.Row | None:
+        cur = await self._conn.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,))
+        return await cur.fetchone()
+
+    def _row_to_agent_run(self, row: aiosqlite.Row) -> AgentRunOut:
+        raw_result = row["result_json"]
+        result = json.loads(raw_result) if raw_result else None
+        return AgentRunOut(
+            id=str(row["id"]),
+            job_id=str(row["job_id"]),
+            agent=AgentKind(str(row["agent"])),
+            status=AgentRunStatus(str(row["status"])),
+            force=bool(row["force_run"]),
+            created_at=_parse_iso(str(row["created_at"])),
+            updated_at=_parse_iso(str(row["updated_at"])),
+            error=row["error"],
+            result=result,
+            event_id=row["event_id"],
+            meta=json.loads(row["meta_json"] or "{}"),
+        )
 
     async def next_pending_job(self) -> JobRecord | None:
         cur = await self._conn.execute(

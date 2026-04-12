@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     vllm_agent_timeout_sec: float = Field(default=120.0, ge=10.0)
 
     worker_poll_interval_sec: float = Field(default=1.0, ge=0.2)
+    agent_worker_poll_interval_sec: float = Field(default=0.4, ge=0.1, le=10.0)
 
     # Comma-separated origins for browser UI (http://localhost omits :80; include :3000 if you remap the UI port)
     cors_origins: str = Field(

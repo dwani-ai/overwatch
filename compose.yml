@@ -65,6 +65,7 @@ services:
       - INGEST_POLL_INTERVAL_SEC=5
       - INGEST_STABLE_SEC=2
       - WORKER_POLL_INTERVAL_SEC=1
+      - AGENT_WORKER_POLL_INTERVAL_SEC=0.4
     volumes:
       - ./data/ingest:/data/ingest
       - ./data/overwatch:/data/overwatch

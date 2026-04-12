@@ -6,10 +6,22 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi.responses import JSONResponse
 
+from overwatch.agents.risk_review import AGENT_RISK_REVIEW_EVENT
 from overwatch.agents.synthesis import AGENT_SYNTHESIS_EVENT, run_synthesis_agent
 from overwatch.config import Settings
-from overwatch.models import AgentTrack, EventRecord, JobCreate, JobRecord, JobStatus, SourceType
+from overwatch.models import (
+    AgentKind,
+    AgentRunCreate,
+    AgentRunOut,
+    AgentTrack,
+    EventRecord,
+    JobCreate,
+    JobRecord,
+    JobStatus,
+    SourceType,
+)
 from overwatch.store import JobStore
 
 router = APIRouter(prefix="/v1")
@@ -96,6 +108,93 @@ async def get_job_summary(job_id: str, store: StoreDep) -> dict:
     return job.summary
 
 
+def _agent_run_public_dict(run: AgentRunOut) -> dict:
+    return {
+        "id": run.id,
+        "job_id": run.job_id,
+        "agent": run.agent.value,
+        "status": run.status.value,
+        "force": run.force,
+        "created_at": run.created_at.isoformat(),
+        "updated_at": run.updated_at.isoformat(),
+        "error": run.error,
+        "result": run.result,
+        "event_id": run.event_id,
+        "meta": run.meta,
+    }
+
+
+def _require_job_for_agents(job: JobRecord) -> None:
+    if job.status != JobStatus.completed:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Job must be completed before running agents",
+        )
+    if not job.summary:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Job has no summary — enable VLLM and ensure chunk analysis produced a summary",
+        )
+
+
+def _require_vllm_configured(settings: Settings) -> None:
+    if not settings.vllm_base_url.strip():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="VLLM_BASE_URL is not configured",
+        )
+
+
+@router.post("/jobs/{job_id}/agent-runs")
+async def enqueue_agent_run(
+    job_id: str,
+    request: Request,
+    store: StoreDep,
+    body: AgentRunCreate,
+) -> JSONResponse:
+    """
+    Queue an agent run (**async**). Returns **202** with ``run_id``; poll ``GET /v1/agent-runs/{run_id}``.
+    """
+    settings: Settings = request.app.state.settings
+    try:
+        job = await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    _require_job_for_agents(job)
+    _require_vllm_configured(settings)
+
+    run = await store.create_agent_run(job_id, agent=body.agent, force=body.force)
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "run_id": run.id,
+            "job_id": run.job_id,
+            "agent": run.agent.value,
+            "status": run.status.value,
+            "created_at": run.created_at.isoformat(),
+            "poll_url": f"/v1/agent-runs/{run.id}",
+        },
+    )
+
+
+@router.get("/agent-runs/{run_id}")
+async def get_agent_run(run_id: str, store: StoreDep) -> dict:
+    run = await store.get_agent_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent run not found")
+    return _agent_run_public_dict(run)
+
+
+@router.get("/jobs/{job_id}/agent-runs")
+async def list_job_agent_runs(job_id: str, store: StoreDep, limit: int = 30) -> dict:
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    runs = await store.list_agent_runs_for_job(job_id, limit=min(max(limit, 1), 100))
+    return {"items": [_agent_run_public_dict(r) for r in runs]}
+
+
 @router.get("/jobs/{job_id}/agents/synthesis")
 async def get_job_synthesis(job_id: str, store: StoreDep) -> dict:
     """Return the latest stored synthesis agent output for this job, if any."""
@@ -111,7 +210,35 @@ async def get_job_synthesis(job_id: str, store: StoreDep) -> dict:
     if ev is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No synthesis run yet. POST /v1/jobs/{id}/agents/synthesis first.",
+            detail="No synthesis run yet. POST /v1/jobs/{id}/agent-runs with agent=synthesis or POST …/agents/synthesis?blocking=true.",
+        )
+    return {
+        "event_id": ev.id,
+        "observed_at": ev.observed_at.isoformat(),
+        "result": ev.payload.get("result"),
+        "error": ev.payload.get("error"),
+        "attempts": ev.payload.get("attempts"),
+        "truncated_input": ev.payload.get("truncated_input"),
+        "model": ev.payload.get("model"),
+    }
+
+
+@router.get("/jobs/{job_id}/agents/risk-review")
+async def get_job_risk_review(job_id: str, store: StoreDep) -> dict:
+    """Return the latest stored **risk review** agent output for this job, if any."""
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    ev = await store.get_latest_event(
+        job_id,
+        agent=AgentTrack.orchestrator,
+        event_type=AGENT_RISK_REVIEW_EVENT,
+    )
+    if ev is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No risk review run yet. POST /v1/jobs/{id}/agent-runs with agent=risk_review.",
         )
     return {
         "event_id": ev.id,
@@ -130,30 +257,35 @@ async def post_job_synthesis(
     request: Request,
     store: StoreDep,
     force: bool = False,
-) -> dict:
+    blocking: bool = False,
+) -> dict | JSONResponse:
     """
-    Run the **synthesis** orchestrator: text-only LLM over the job ``summary`` JSON.
-    Idempotent unless ``force=true``. Persists an ``agent_synthesis`` event.
+    Run the **synthesis** orchestrator.
+
+    - Default ``blocking=false``: enqueue an async run (**202** + ``run_id``); poll ``GET /v1/agent-runs/{run_id}``.
+    - ``blocking=true``: wait for the LLM inline (legacy; same as original behaviour).
     """
     settings: Settings = request.app.state.settings
     try:
         job = await store.get_job(job_id)
     except KeyError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    if job.status != JobStatus.completed:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Job must be completed before running agents",
-        )
-    if not job.summary:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Job has no summary — enable VLLM and ensure chunk analysis produced a summary",
-        )
-    if not settings.vllm_base_url.strip():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="VLLM_BASE_URL is not configured",
+    _require_job_for_agents(job)
+    _require_vllm_configured(settings)
+
+    if not blocking:
+        run = await store.create_agent_run(job_id, agent=AgentKind.synthesis, force=force)
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "run_id": run.id,
+                "job_id": run.job_id,
+                "agent": run.agent.value,
+                "status": run.status.value,
+                "created_at": run.created_at.isoformat(),
+                "poll_url": f"/v1/agent-runs/{run.id}",
+                "detail": "Poll GET /v1/agent-runs/{run_id} until status is completed or failed.",
+            },
         )
 
     if not force:

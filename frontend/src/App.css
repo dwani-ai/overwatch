@@ -99,6 +99,36 @@ input[type="file"] {
   color: #8b98a5;
 }
 
+.agents-panel .agent-block + .agent-block {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #2f3d52;
+}
+
+.risk-badge {
+  font-size: 0.9rem;
+  margin: 0 0 0.75rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid #2f3d52;
+}
+
+.risk-badge.risk-high {
+  border-color: #c45c5c;
+  background: rgba(196, 92, 92, 0.12);
+}
+
+.risk-badge.risk-medium {
+  border-color: #c9a227;
+  background: rgba(201, 162, 39, 0.1);
+}
+
+.risk-badge.risk-low,
+.risk-badge.risk-unknown {
+  border-color: #3d5a4a;
+  background: rgba(80, 160, 120, 0.08);
+}
+
 .phase {
   margin: 0.75rem 0 0;
   color: #8b98a5;
