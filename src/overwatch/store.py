@@ -11,6 +11,8 @@ import aiosqlite
 from overwatch.db import connect
 from overwatch.models import (
     AgentKind,
+    AgentOrchestrationOut,
+    AgentOrchestrationStatus,
     AgentRunOut,
     AgentRunStatus,
     AgentTrack,
@@ -228,13 +230,15 @@ class JobStore:
         *,
         agent: AgentKind,
         force: bool = False,
+        meta: dict[str, Any] | None = None,
     ) -> AgentRunOut:
         run_id = str(uuid.uuid4())
         now = _iso(datetime.now(timezone.utc))
+        meta_json = json.dumps(meta or {})
         await self._conn.execute(
             """
             INSERT INTO agent_runs (id, job_id, agent, status, force_run, created_at, updated_at, error, result_json, event_id, meta_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '{}')
+            VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
             """,
             (
                 run_id,
@@ -244,12 +248,189 @@ class JobStore:
                 1 if force else 0,
                 now,
                 now,
+                meta_json,
             ),
         )
         await self._conn.commit()
         row = await self._fetch_agent_run_row(run_id)
         assert row is not None
         return self._row_to_agent_run(row)
+
+    async def job_has_active_agent_orchestration(self, job_id: str) -> bool:
+        cur = await self._conn.execute(
+            """
+            SELECT 1 FROM agent_orchestrations
+            WHERE job_id = ? AND status = ?
+            LIMIT 1
+            """,
+            (job_id, AgentOrchestrationStatus.running.value),
+        )
+        return await cur.fetchone() is not None
+
+    async def start_agent_orchestration(
+        self,
+        job_id: str,
+        steps: list[AgentKind],
+        *,
+        force: bool = False,
+    ) -> tuple[AgentOrchestrationOut, AgentRunOut]:
+        """
+        Create orchestration row and enqueue the **first** step in one transaction.
+        """
+        if not steps:
+            raise ValueError("steps must be non-empty")
+        orch_id = str(uuid.uuid4())
+        run_id = str(uuid.uuid4())
+        now = _iso(datetime.now(timezone.utc))
+        step_values = [s.value for s in steps]
+        steps_json = json.dumps(step_values)
+        first = steps[0]
+        orch_meta = {
+            "orchestration_id": orch_id,
+            "orch_step": 0,
+            "orch_steps": step_values,
+        }
+        run_meta_json = json.dumps(orch_meta)
+        await self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            await self._conn.execute(
+                """
+                INSERT INTO agent_orchestrations (
+                    id, job_id, status, steps_json, current_step, force_run, error, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                """,
+                (
+                    orch_id,
+                    job_id,
+                    AgentOrchestrationStatus.running.value,
+                    steps_json,
+                    0,
+                    1 if force else 0,
+                    now,
+                    now,
+                ),
+            )
+            await self._conn.execute(
+                """
+                INSERT INTO agent_runs (id, job_id, agent, status, force_run, created_at, updated_at, error, result_json, event_id, meta_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
+                """,
+                (
+                    run_id,
+                    job_id,
+                    first.value,
+                    AgentRunStatus.pending.value,
+                    1 if force else 0,
+                    now,
+                    now,
+                    run_meta_json,
+                ),
+            )
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+        orch_row = await self._fetch_agent_orch_row(orch_id)
+        run_row = await self._fetch_agent_run_row(run_id)
+        assert orch_row is not None and run_row is not None
+        return self._row_to_agent_orch(orch_row), self._row_to_agent_run(run_row)
+
+    async def get_agent_orchestration(self, orch_id: str) -> AgentOrchestrationOut | None:
+        row = await self._fetch_agent_orch_row(orch_id)
+        return None if row is None else self._row_to_agent_orch(row)
+
+    async def list_agent_orchestrations_for_job(
+        self,
+        job_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[AgentOrchestrationOut]:
+        lim = max(1, min(limit, 50))
+        cur = await self._conn.execute(
+            """
+            SELECT * FROM agent_orchestrations
+            WHERE job_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (job_id, lim),
+        )
+        rows = await cur.fetchall()
+        return [self._row_to_agent_orch(r) for r in rows]
+
+    async def update_agent_orchestration_step(self, orch_id: str, *, current_step: int) -> None:
+        now = _iso(datetime.now(timezone.utc))
+        await self._conn.execute(
+            """
+            UPDATE agent_orchestrations SET current_step = ?, updated_at = ? WHERE id = ?
+            """,
+            (current_step, now, orch_id),
+        )
+        await self._conn.commit()
+
+    async def complete_agent_orchestration(self, orch_id: str) -> None:
+        now = _iso(datetime.now(timezone.utc))
+        cur = await self._conn.execute(
+            "SELECT steps_json FROM agent_orchestrations WHERE id = ?",
+            (orch_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return
+        n = len(json.loads(row["steps_json"] or "[]"))
+        await self._conn.execute(
+            """
+            UPDATE agent_orchestrations
+            SET status = ?, current_step = ?, updated_at = ?, error = NULL
+            WHERE id = ? AND status = ?
+            """,
+            (
+                AgentOrchestrationStatus.completed.value,
+                n,
+                now,
+                orch_id,
+                AgentOrchestrationStatus.running.value,
+            ),
+        )
+        await self._conn.commit()
+
+    async def fail_agent_orchestration(self, orch_id: str, error: str) -> None:
+        now = _iso(datetime.now(timezone.utc))
+        await self._conn.execute(
+            """
+            UPDATE agent_orchestrations
+            SET status = ?, updated_at = ?, error = ?
+            WHERE id = ? AND status = ?
+            """,
+            (
+                AgentOrchestrationStatus.failed.value,
+                now,
+                error,
+                orch_id,
+                AgentOrchestrationStatus.running.value,
+            ),
+        )
+        await self._conn.commit()
+
+    async def _fetch_agent_orch_row(self, orch_id: str) -> aiosqlite.Row | None:
+        cur = await self._conn.execute("SELECT * FROM agent_orchestrations WHERE id = ?", (orch_id,))
+        return await cur.fetchone()
+
+    def _row_to_agent_orch(self, row: aiosqlite.Row) -> AgentOrchestrationOut:
+        raw_steps = row["steps_json"]
+        step_strs: list[str] = json.loads(raw_steps) if raw_steps else []
+        return AgentOrchestrationOut(
+            id=str(row["id"]),
+            job_id=str(row["job_id"]),
+            status=AgentOrchestrationStatus(str(row["status"])),
+            steps=[AgentKind(s) for s in step_strs],
+            current_step=int(row["current_step"]),
+            force=bool(row["force_run"]),
+            error=row["error"],
+            created_at=_parse_iso(str(row["created_at"])),
+            updated_at=_parse_iso(str(row["updated_at"])),
+        )
 
     async def get_agent_run(self, run_id: str) -> AgentRunOut | None:
         row = await self._fetch_agent_run_row(run_id)

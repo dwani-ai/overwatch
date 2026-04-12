@@ -6,6 +6,10 @@ import time
 from typing import Any
 
 from overwatch.agents.incident_brief import AGENT_INCIDENT_BRIEF_EVENT, run_incident_brief_agent
+from overwatch.agents.orchestration import (
+    notify_agent_orchestration_terminal,
+    orchestration_fields,
+)
 from overwatch.agents.risk_review import AGENT_RISK_REVIEW_EVENT, run_risk_review_agent
 from overwatch.agents.synthesis import AGENT_SYNTHESIS_EVENT, run_synthesis_agent
 from overwatch.config import Settings
@@ -36,6 +40,8 @@ def _clean_meta(meta: dict[str, Any]) -> dict[str, Any]:
 async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOut) -> None:
     """Execute one claimed agent run (LLM + event + ``agent_runs`` row update)."""
     run_id = run.id
+    orch_base = orchestration_fields(run.meta)
+
     try:
         job = await store.get_job(run.job_id)
     except KeyError:
@@ -43,23 +49,33 @@ async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOu
             run_id,
             status=AgentRunStatus.failed,
             error="Job not found",
+            meta=orch_base,
+        )
+        await notify_agent_orchestration_terminal(
+            store, run.job_id, run.meta, success=False, error="Job not found"
         )
         return
 
     if job.status != JobStatus.completed or not job.summary:
+        msg = "Job must be completed with a summary before running agents"
         await store.finish_agent_run(
             run_id,
             status=AgentRunStatus.failed,
-            error="Job must be completed with a summary before running agents",
+            error=msg,
+            meta=orch_base,
         )
+        await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=False, error=msg)
         return
 
     if not settings.vllm_base_url.strip():
+        msg = "VLLM_BASE_URL is not configured"
         await store.finish_agent_run(
             run_id,
             status=AgentRunStatus.failed,
-            error="VLLM_BASE_URL is not configured",
+            error=msg,
+            meta=orch_base,
         )
+        await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=False, error=msg)
         return
 
     ev_type = _EVENT_TYPE[run.agent]
@@ -77,6 +93,7 @@ async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOu
         ):
             res = prev.payload["result"]
             meta = {
+                **orch_base,
                 "cached": True,
                 "attempts": 0,
                 "model": settings.vllm_model,
@@ -89,6 +106,7 @@ async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOu
                 event_id=prev.id,
                 meta=meta,
             )
+            await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=True)
             return
 
     if run.agent == AgentKind.synthesis:
@@ -98,11 +116,14 @@ async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOu
     elif run.agent == AgentKind.incident_brief:
         result_model, meta = await run_incident_brief_agent(settings, job.summary)
     else:
+        msg = f"Unsupported agent kind: {run.agent.value}"
         await store.finish_agent_run(
             run_id,
             status=AgentRunStatus.failed,
-            error=f"Unsupported agent kind: {run.agent.value}",
+            error=msg,
+            meta=orch_base,
         )
+        await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=False, error=msg)
         return
 
     payload: dict[str, Any] = {
@@ -123,22 +144,33 @@ async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOu
     )
 
     if result_model is None:
+        err = str(meta.get("error") or "Agent failed")
+        fin_meta = {
+            **orch_base,
+            **_clean_meta({k: v for k, v in meta.items() if k != "error"}),
+        }
         await store.finish_agent_run(
             run_id,
             status=AgentRunStatus.failed,
-            error=str(meta.get("error") or "Agent failed"),
+            error=err,
             event_id=event_id,
-            meta=_clean_meta({k: v for k, v in meta.items() if k != "error"}),
+            meta=fin_meta,
         )
+        await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=False, error=err)
         return
 
+    fin_meta = {
+        **orch_base,
+        **_clean_meta({k: v for k, v in meta.items() if k != "error"}),
+    }
     await store.finish_agent_run(
         run_id,
         status=AgentRunStatus.completed,
         result=result_model.model_dump(),
         event_id=event_id,
-        meta=_clean_meta({k: v for k, v in meta.items() if k != "error"}),
+        meta=fin_meta,
     )
+    await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=True)
 
 
 async def agent_worker_loop(store: JobStore, settings: Settings, stop: asyncio.Event) -> None:
@@ -164,10 +196,15 @@ async def agent_worker_loop(store: JobStore, settings: Settings, stop: asyncio.E
             except Exception:
                 logger.exception("Agent run %s failed with unexpected error", run.id)
                 try:
+                    msg = "Internal error while running agent"
                     await store.finish_agent_run(
                         run.id,
                         status=AgentRunStatus.failed,
-                        error="Internal error while running agent",
+                        error=msg,
+                        meta=orchestration_fields(run.meta),
+                    )
+                    await notify_agent_orchestration_terminal(
+                        store, run.job_id, run.meta, success=False, error=msg
                     )
                 except Exception:
                     logger.exception("Could not mark agent run %s failed", run.id)

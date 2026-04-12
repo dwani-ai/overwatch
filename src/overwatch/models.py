@@ -300,6 +300,46 @@ class AgentRunCreate(BaseModel):
     force: bool = False
 
 
+class AgentOrchestrateCreate(BaseModel):
+    """
+    Run job-level agents **in order** (linear pipeline).
+
+    When step *k* finishes successfully, step *k+1* is enqueued automatically.
+    On any failure, the orchestration stops and is marked ``failed``.
+    """
+
+    steps: list[AgentKind] = Field(
+        ...,
+        min_length=1,
+        max_length=16,
+        description="Ordered agent kinds (e.g. synthesis → risk_review → incident_brief).",
+    )
+    force: bool = Field(
+        default=False,
+        description="If true, each step bypasses cached orchestrator events (full LLM each time).",
+    )
+
+
+class AgentOrchestrationStatus(str, Enum):
+    running = "running"
+    completed = "completed"
+    failed = "failed"
+
+
+class AgentOrchestrationOut(BaseModel):
+    """Multi-agent run: sequential steps with persisted status for polling."""
+
+    id: str
+    job_id: str
+    status: AgentOrchestrationStatus
+    steps: list[AgentKind]
+    current_step: int
+    force: bool = False
+    error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class AgentRunOut(BaseModel):
     """Persisted async agent invocation (queue row + optional result)."""
 

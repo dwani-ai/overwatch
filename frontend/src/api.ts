@@ -26,6 +26,9 @@ export function formatHttpError(status: number, body: string): string {
   if (status === 429) {
     return b || "Too many requests. Wait briefly and try again.";
   }
+  if (status === 409) {
+    return b || "Conflict — e.g. an orchestration is already running for this job.";
+  }
   return b || `Request failed (HTTP ${status}).`;
 }
 
@@ -138,6 +141,73 @@ export async function listJobAgentRuns(
   const r = await apiFetch(`/jobs/${jobId}/agent-runs?limit=${lim}`);
   if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
   return r.json();
+}
+
+/** Default linear pipeline: context → risk → handoff brief. */
+export const DEFAULT_AGENT_PIPELINE: AgentKind[] = ["synthesis", "risk_review", "incident_brief"];
+
+export type AgentOrchestrationPublic = {
+  id: string;
+  job_id: string;
+  status: string;
+  steps: AgentKind[];
+  current_step: number;
+  total_steps: number;
+  force: boolean;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentOrchestrateAccepted = {
+  orchestration_id: string;
+  job_id: string;
+  steps: AgentKind[];
+  status: string;
+  current_step: number;
+  total_steps: number;
+  force: boolean;
+  head_run_id: string;
+  poll_url: string;
+  head_run_poll_url: string;
+  detail?: string;
+};
+
+export async function startAgentOrchestration(
+  jobId: string,
+  steps: AgentKind[] = DEFAULT_AGENT_PIPELINE,
+  force = false,
+): Promise<AgentOrchestrateAccepted> {
+  const r = await apiFetch(`/jobs/${jobId}/agent-runs/orchestrate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ steps, force }),
+  });
+  if (r.status !== 202) {
+    throw new Error(formatHttpError(r.status, await r.text()));
+  }
+  return r.json();
+}
+
+export async function getAgentOrchestration(orchId: string): Promise<AgentOrchestrationPublic> {
+  const r = await apiFetch(`/agent-orchestrations/${orchId}`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function pollAgentOrchestration(
+  orchId: string,
+  opts?: { intervalMs?: number; maxWaitMs?: number },
+): Promise<AgentOrchestrationPublic> {
+  const intervalMs = opts?.intervalMs ?? 800;
+  const maxWaitMs = opts?.maxWaitMs ?? 900_000;
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxWaitMs) {
+    const o = await getAgentOrchestration(orchId);
+    if (o.status === "completed" || o.status === "failed") return o;
+    await new Promise((res) => setTimeout(res, intervalMs));
+  }
+  throw new Error("Timed out waiting for orchestration");
 }
 
 export async function pollAgentRun(

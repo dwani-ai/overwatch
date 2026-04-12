@@ -19,6 +19,7 @@ All processed video runs are logged with **timestamp + frame index + event paylo
   - **Risk review** — safety / security triage (`agent_risk_review` event).
   - **Incident brief** — short handoff narrative and follow-ups (`agent_incident_brief` event).
   - **Async queue:** **`POST /v1/jobs/{id}/agent-runs`** with body `{"agent":"synthesis"|"risk_review"|"incident_brief","force":?}` returns **202** and a **`run_id`**; poll **`GET /v1/agent-runs/{run_id}`** until `status` is `completed` or `failed`. A background **agent worker** (started with the API) drains the queue and still appends **orchestrator** events for audit. Stale `processing` rows (e.g. after a crash) are marked **failed** periodically.
+  - **Orchestrated flow (linear):** **`POST /v1/jobs/{id}/agent-runs/orchestrate`** with body `{"steps":["synthesis","risk_review","incident_brief"], "force":?}` returns **202** with **`orchestration_id`** and **`head_run_id`**. Poll **`GET /v1/agent-orchestrations/{orchestration_id}`** until `status` is `completed` or `failed`; each step enqueues the next automatically on success. Only one **running** orchestration per job (**409** if a second is started). List past runs: **`GET /v1/jobs/{id}/agent-orchestrations`**. The UI includes **Run full pipeline** on the job results view.
   - **Blocking synthesis** (optional): **`POST /v1/jobs/{id}/agents/synthesis?blocking=true`** waits for the LLM in-process (legacy / scripts).
   - **Latest by kind:** **`GET …/agents/synthesis`**, **`GET …/agents/risk-review`**, and **`GET …/agents/incident-brief`** return the newest stored event payload. The web UI runs agents via the async API and polls.  
 - **Web UI** (Vite + React): upload a video and poll for job status + summary (`frontend/`; Docker **`overwatch-ui`** publishes the gateway on host port **80**)  
@@ -149,6 +150,7 @@ Set `VLLM_BASE_URL=` empty to skip all vLLM calls (probe + chat).
 - `GET /v1/jobs/{id}/summary` → aggregated `chunk_analyses` after the job completes  
 - `GET /v1/jobs/{id}` includes `summary` when present  
 - `POST /v1/jobs/{id}/agent-runs` → queue agent run (**202** + `run_id`); `GET /v1/agent-runs/{run_id}` → status and `result`  
+- `POST /v1/jobs/{id}/agent-runs/orchestrate` → sequential multi-agent run (**202** + `orchestration_id`, `head_run_id`); `GET /v1/agent-orchestrations/{orchestration_id}` → pipeline status; `GET /v1/jobs/{id}/agent-orchestrations` → history  
 - `GET /v1/jobs/{id}/agent-runs` → recent runs for that job  
 - `POST /v1/jobs/{id}/agents/synthesis?blocking=true` → blocking synthesis; without `blocking`, **202** + async queue (same as `agent-runs` with `synthesis`)  
 - `GET /v1/jobs/{id}/agents/synthesis` / **`…/agents/risk-review`** / **`…/agents/incident-brief`** → latest stored event payload  

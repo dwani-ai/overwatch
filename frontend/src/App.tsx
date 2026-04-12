@@ -9,11 +9,14 @@ import type {
 } from "./api";
 import {
   createAgentRun,
+  DEFAULT_AGENT_PIPELINE,
   getJob,
   getSummary,
   listJobAgentRuns,
   listJobs,
+  pollAgentOrchestration,
   pollAgentRun,
+  startAgentOrchestration,
   uploadVideo,
 } from "./api";
 import "./App.css";
@@ -270,6 +273,10 @@ function SummaryView({ jobId, data }: { jobId: string | null; data: Record<strin
 
 function AgentsPanel({ jobId }: { jobId: string }) {
   const [allRuns, setAllRuns] = useState<AgentRunPublic[]>([]);
+  const [orchPhase, setOrchPhase] = useState("");
+  const [orchErr, setOrchErr] = useState<string | null>(null);
+  const [orchBusy, setOrchBusy] = useState(false);
+
   const refreshRuns = useCallback(async () => {
     try {
       const { items } = await listJobAgentRuns(jobId, 100);
@@ -293,8 +300,63 @@ function AgentsPanel({ jobId }: { jobId: string }) {
     return () => clearInterval(t);
   }, [allRuns, refreshRuns]);
 
+  const runOrchestratedPipeline = async (force: boolean) => {
+    setOrchErr(null);
+    setOrchPhase("");
+    setOrchBusy(true);
+    try {
+      const q = await startAgentOrchestration(jobId, DEFAULT_AGENT_PIPELINE, force);
+      setOrchPhase(
+        `Running ${q.steps.join(" → ")}… (${q.orchestration_id.slice(0, 8)}…)`,
+      );
+      const done = await pollAgentOrchestration(q.orchestration_id, {
+        intervalMs: 1200,
+        maxWaitMs: 900_000,
+      });
+      await refreshRuns();
+      if (done.status === "failed") {
+        setOrchErr(done.error || "Orchestration failed");
+        setOrchPhase("");
+        return;
+      }
+      setOrchPhase("Orchestrated pipeline completed.");
+    } catch (e) {
+      setOrchErr(e instanceof Error ? e.message : String(e));
+      setOrchPhase("");
+    } finally {
+      setOrchBusy(false);
+    }
+  };
+
   return (
     <div className="agents-panel">
+      <div className="synthesis agent-block orchestration-block">
+        <h3 className="synthesis-title">Orchestrated pipeline</h3>
+        <p className="muted small">
+          Runs <strong>synthesis</strong> → <strong>risk review</strong> → <strong>incident brief</strong> in
+          sequence. The next step starts only after the previous one succeeds.
+        </p>
+        <div className="synthesis-actions">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={orchBusy}
+            onClick={() => runOrchestratedPipeline(false)}
+          >
+            {orchBusy ? "Running pipeline…" : "Run full pipeline"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={orchBusy}
+            onClick={() => runOrchestratedPipeline(true)}
+          >
+            Force pipeline (no cache)
+          </button>
+        </div>
+        {orchPhase ? <p className="phase small">{orchPhase}</p> : null}
+        {orchErr ? <p className="error small">{orchErr}</p> : null}
+      </div>
       <AgentAsyncBlock
         jobId={jobId}
         agent="synthesis"

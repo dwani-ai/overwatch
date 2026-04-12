@@ -14,6 +14,8 @@ from overwatch.agents.synthesis import AGENT_SYNTHESIS_EVENT, run_synthesis_agen
 from overwatch.config import Settings
 from overwatch.models import (
     AgentKind,
+    AgentOrchestrateCreate,
+    AgentOrchestrationOut,
     AgentRunCreate,
     AgentRunOut,
     AgentTrack,
@@ -109,6 +111,21 @@ async def get_job_summary(job_id: str, store: StoreDep) -> dict:
     return job.summary
 
 
+def _agent_orch_public_dict(o: AgentOrchestrationOut) -> dict:
+    return {
+        "id": o.id,
+        "job_id": o.job_id,
+        "status": o.status.value,
+        "steps": [s.value for s in o.steps],
+        "current_step": o.current_step,
+        "total_steps": len(o.steps),
+        "force": o.force,
+        "error": o.error,
+        "created_at": o.created_at.isoformat(),
+        "updated_at": o.updated_at.isoformat(),
+    }
+
+
 def _agent_run_public_dict(run: AgentRunOut) -> dict:
     return {
         "id": run.id,
@@ -176,6 +193,72 @@ async def enqueue_agent_run(
             "poll_url": f"/v1/agent-runs/{run.id}",
         },
     )
+
+
+@router.post("/jobs/{job_id}/agent-runs/orchestrate")
+async def orchestrate_agent_runs(
+    job_id: str,
+    request: Request,
+    store: StoreDep,
+    body: AgentOrchestrateCreate,
+) -> JSONResponse:
+    """
+    Start a **sequential** multi-agent run: when each step finishes successfully, the next is enqueued.
+    Poll ``GET /v1/agent-orchestrations/{id}`` for pipeline status and ``GET /v1/agent-runs/{run_id}`` for the active step.
+    """
+    settings: Settings = request.app.state.settings
+    try:
+        job = await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    _require_job_for_agents(job)
+    _require_vllm_configured(settings)
+
+    if await store.job_has_active_agent_orchestration(job_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An orchestration is already running for this job. Wait for it to finish or fail.",
+        )
+
+    orch, head = await store.start_agent_orchestration(
+        job_id,
+        body.steps,
+        force=body.force,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "orchestration_id": orch.id,
+            "job_id": orch.job_id,
+            "steps": [s.value for s in orch.steps],
+            "status": orch.status.value,
+            "current_step": orch.current_step,
+            "total_steps": len(orch.steps),
+            "force": orch.force,
+            "head_run_id": head.id,
+            "poll_url": f"/v1/agent-orchestrations/{orch.id}",
+            "head_run_poll_url": f"/v1/agent-runs/{head.id}",
+            "detail": "Poll orchestration until status is completed or failed; poll head_run_id while a step runs.",
+        },
+    )
+
+
+@router.get("/agent-orchestrations/{orch_id}")
+async def get_agent_orchestration(orch_id: str, store: StoreDep) -> dict:
+    orch = await store.get_agent_orchestration(orch_id)
+    if orch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orchestration not found")
+    return _agent_orch_public_dict(orch)
+
+
+@router.get("/jobs/{job_id}/agent-orchestrations")
+async def list_job_agent_orchestrations(job_id: str, store: StoreDep, limit: int = 20) -> dict:
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    rows = await store.list_agent_orchestrations_for_job(job_id, limit=min(max(limit, 1), 50))
+    return {"items": [_agent_orch_public_dict(o) for o in rows]}
 
 
 @router.get("/agent-runs/{run_id}")
