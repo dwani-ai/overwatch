@@ -4,6 +4,7 @@ import asyncio
 import logging
 from pathlib import Path
 
+from overwatch.analysis.chunk_pipeline import job_summary_from_chunks, run_structured_chunk_analysis
 from overwatch.config import Settings
 from overwatch.models import (
     AgentTrack,
@@ -15,27 +16,9 @@ from overwatch.models import (
 )
 from overwatch.store import JobStore
 from overwatch.video import extract_segment_mp4, ffprobe, plan_chunks
-from overwatch.vllm_client import (
-    chat_completion,
-    chunk_video_user_messages,
-    extract_assistant_text,
-    fetch_models,
-)
+from overwatch.vllm_client import chat_completion, extract_assistant_text, fetch_models
 
 logger = logging.getLogger(__name__)
-
-_CHUNK_PROMPT = """You are Overwatch video analytics. You are given ONE short MP4 clip cut from a longer recording (warehouse / CCTV style).
-
-Clip time range in the full video: {start_ms} ms → {end_ms} ms (approx. {duration_sec:.1f} s).
-
-Analyse only what is visible in this clip. Answer with these sections (use short bullets):
-
-1) **Main events** — what happens, key actions.
-2) **Security / safety** — anything concerning (unauthorized access, PPE, unsafe acts) or "none apparent".
-3) **Logistics** — pallets, loads, vehicles, notable object movement, or "none apparent".
-4) **Attendance (counts only)** — approximate number of people visible entering/leaving frame or grouped; **no names or identity**.
-
-Be factual; if uncertain, say so."""
 
 
 async def _extract_chunk_mp4(
@@ -128,6 +111,8 @@ async def process_one_job(store: JobStore, settings: Settings) -> bool:
             payload=PipelineChunkPlanPayload(target_fps=1.0, chunks=chunks).model_dump(),
         )
 
+        chunk_analyses: list[dict] = []
+
         base = settings.vllm_base_url.strip()
         if base:
             models_res = await fetch_models(base, api_key=settings.vllm_api_key)
@@ -139,14 +124,14 @@ async def process_one_job(store: JobStore, settings: Settings) -> bool:
             )
 
             summary = (
-                f"Overwatch job context (text). A short MP4 clip per planned chunk will be sent next.\n"
+                f"Overwatch job context (text). Structured multimodal chunk analysis will follow.\n"
                 f"source_path={job.source_path}\n"
                 f"duration_sec={probe.duration_sec}\n"
                 f"avg_frame_rate={probe.avg_frame_rate}\n"
                 f"resolution={probe.width}x{probe.height}\n"
                 f"codec={probe.codec}\n"
                 f"planned_chunks={len(chunks)}\n\n"
-                "Reply briefly: confirm you are ready to analyse video clips for this job."
+                "Reply briefly: confirm you are ready."
             )
             chat_res = await chat_completion(
                 base,
@@ -183,8 +168,8 @@ async def process_one_job(store: JobStore, settings: Settings) -> bool:
                         if len(mp4) > settings.vllm_segment_max_bytes:
                             await store.append_event(
                                 job.id,
-                                agent=AgentTrack.main_events,
-                                event_type="vllm_chunk_video",
+                                agent=AgentTrack.pipeline,
+                                event_type="chunk_analysis",
                                 severity="warning",
                                 payload={
                                     **payload_base,
@@ -196,55 +181,43 @@ async def process_one_job(store: JobStore, settings: Settings) -> bool:
                             )
                             continue
 
-                        duration_sec = (ch.end_pts_ms - ch.start_pts_ms) / 1000.0
-                        instruction = _CHUNK_PROMPT.format(
-                            start_ms=ch.start_pts_ms,
-                            end_ms=ch.end_pts_ms,
-                            duration_sec=duration_sec,
-                        )
-                        mm_messages = chunk_video_user_messages(
-                            instruction=instruction,
-                            mp4_bytes=mp4,
-                        )
-                        chunk_res = await chat_completion(
-                            base,
-                            model=settings.vllm_model,
-                            messages=mm_messages,
+                        analysis = await run_structured_chunk_analysis(
+                            openai_base=base,
+                            vllm_model=settings.vllm_model,
                             api_key=settings.vllm_api_key,
-                            timeout_sec=settings.vllm_chunk_timeout_sec,
-                            max_tokens=settings.vllm_chunk_max_tokens,
+                            chunk=ch,
+                            mp4_bytes=mp4,
+                            settings=settings,
                         )
-                        atext = extract_assistant_text(chunk_res.data)
-                        nchoices = len(chunk_res.data.get("choices", [])) if chunk_res.data else 0
+                        chunk_analyses.append(analysis)
                         await store.append_event(
                             job.id,
-                            agent=AgentTrack.main_events,
-                            event_type="vllm_chunk_video",
+                            agent=AgentTrack.pipeline,
+                            event_type="chunk_analysis",
                             frame_index=ch.start_frame,
                             pts_ms=ch.start_pts_ms,
-                            payload={
-                                **payload_base,
-                                **chunk_res.to_event_payload(
-                                    model=settings.vllm_model,
-                                    assistant_preview=(
-                                        (atext[:4000] + "…") if atext and len(atext) > 4000 else atext
-                                    ),
-                                    raw_choice_count=nchoices,
-                                    segment_bytes=len(mp4),
-                                ),
-                            },
+                            payload=analysis,
                         )
                     except Exception as e:
-                        logger.exception("Chunk %s multimodal failed", ch.chunk_index)
+                        logger.exception("Chunk %s analysis failed", ch.chunk_index)
                         await store.append_event(
                             job.id,
-                            agent=AgentTrack.main_events,
-                            event_type="vllm_chunk_video",
+                            agent=AgentTrack.pipeline,
+                            event_type="chunk_analysis",
                             severity="error",
                             frame_index=ch.start_frame,
                             pts_ms=ch.start_pts_ms,
                             payload={**payload_base, "ok": False, "error": str(e)},
                         )
+
+            if chunk_analyses:
+                job_summary = job_summary_from_chunks(
+                    source_path=job.source_path,
+                    duration_sec=probe.duration_sec,
+                    planned_chunks=len(chunks),
+                    analyses=chunk_analyses,
+                )
+                await store.set_job_summary(job.id, job_summary)
 
         await store.update_job_status(job.id, JobStatus.completed)
         if fp:

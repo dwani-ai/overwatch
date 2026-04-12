@@ -38,10 +38,19 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 """
 
 
+async def _migrate(conn: aiosqlite.Connection) -> None:
+    cur = await conn.execute("PRAGMA table_info(jobs)")
+    cols = {str(r[1]) for r in await cur.fetchall()}
+    if "summary_json" not in cols:
+        await conn.execute("ALTER TABLE jobs ADD COLUMN summary_json TEXT")
+        await conn.commit()
+
+
 async def connect(db_path: Path) -> aiosqlite.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = await aiosqlite.connect(db_path)
     conn.row_factory = aiosqlite.Row
     await conn.executescript(SCHEMA)
     await conn.commit()
+    await _migrate(conn)
     return conn

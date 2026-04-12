@@ -18,10 +18,8 @@ class Settings(BaseSettings):
     ingest_stable_sec: float = Field(default=2.0, ge=0.0)
     ingest_extensions: str = Field(default=".mp4,.mkv,.mov,.avi,.webm,.m4v")
 
-    # OpenAI-compatible root (prefix before /chat/completions), e.g. https://host/v1
-    vllm_base_url: str = Field(
-        default="https://vllm-video-api.dwani.ai/v1",
-    )
+    # OpenAI-compatible root (prefix before /chat/completions). Set via env; empty disables vLLM.
+    vllm_base_url: str = Field(default="")
     vllm_model: str = Field(default="gemma4")
     vllm_api_key: str | None = Field(default=None)
     vllm_chat_timeout_sec: float = Field(default=120.0, ge=5.0)
@@ -34,6 +32,8 @@ class Settings(BaseSettings):
     vllm_video_scale_width: int = Field(default=480, ge=160, le=1280)
     vllm_video_crf: int = Field(default=30, ge=18, le=40)
     vllm_segment_include_audio: bool = Field(default=True)
+    vllm_json_retry_max: int = Field(default=2, ge=1, le=6)
+    vllm_specialist_max_tokens: int = Field(default=800, ge=64, le=4096)
 
     worker_poll_interval_sec: float = Field(default=1.0, ge=0.2)
 

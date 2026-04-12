@@ -66,6 +66,10 @@ class JobRecord(BaseModel):
     updated_at: datetime
     error: str | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
+    summary: dict[str, Any] | None = Field(
+        default=None,
+        description="Aggregated structured result after completion (JobSummaryPayload shape).",
+    )
 
 
 class EventRecord(BaseModel):
@@ -128,3 +132,76 @@ class AttendanceCountPayload(BaseModel):
     exits: int = Field(ge=0)
     window_start_ms: int | None = None
     window_end_ms: int | None = None
+
+
+# --- Chunk structured analysis (multimodal observe + specialist text passes) ---
+
+
+class ObservationItem(BaseModel):
+    what: str = Field(..., min_length=1)
+    where_approx: str | None = None
+    when_hint: str | None = None
+
+
+class ObservationsPass(BaseModel):
+    scene_summary: str = ""
+    observations: list[ObservationItem] = Field(default_factory=list)
+
+
+class MainEventItem(BaseModel):
+    title: str
+    detail: str = ""
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class SpecialistMainOut(BaseModel):
+    main_events: list[MainEventItem] = Field(default_factory=list)
+
+
+class SecurityItem(BaseModel):
+    category: str
+    description: str
+    severity: Literal["low", "medium", "high", "info", "unknown"] = "unknown"
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+class LogisticsItemStructured(BaseModel):
+    label: str
+    description: str = ""
+    action: Literal["appeared", "moved", "removed", "unknown"] = "unknown"
+
+
+class SpecialistSecLogOut(BaseModel):
+    security: list[SecurityItem] = Field(default_factory=list)
+    logistics: list[LogisticsItemStructured] = Field(default_factory=list)
+
+
+class AttendanceOut(BaseModel):
+    """Counts only — no identity."""
+
+    approx_people_visible: int | None = Field(default=None, ge=0)
+    entries: int = Field(default=0, ge=0)
+    exits: int = Field(default=0, ge=0)
+    notes: str | None = None
+
+
+class ChunkAnalysisMerged(BaseModel):
+    chunk_index: int
+    start_pts_ms: int
+    end_pts_ms: int
+    start_frame: int
+    end_frame: int
+    scene_summary: str = ""
+    main_events: list[MainEventItem] = Field(default_factory=list)
+    security: list[SecurityItem] = Field(default_factory=list)
+    logistics: list[LogisticsItemStructured] = Field(default_factory=list)
+    attendance: AttendanceOut = Field(default_factory=AttendanceOut)
+
+
+class JobSummaryPayload(BaseModel):
+    schema_version: Literal["1"] = "1"
+    source_path: str
+    duration_sec: float | None = None
+    planned_chunk_count: int = 0
+    analysed_chunk_count: int = 0
+    chunk_analyses: list[ChunkAnalysisMerged] = Field(default_factory=list)

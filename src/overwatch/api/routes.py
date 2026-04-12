@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from overwatch.config import Settings
-from overwatch.models import JobCreate, JobRecord, SourceType
+from overwatch.models import EventRecord, JobCreate, JobRecord, SourceType
 from overwatch.store import JobStore
 
 router = APIRouter(prefix="/v1")
@@ -37,27 +37,60 @@ async def get_job(job_id: str, store: StoreDep) -> JobRecord:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
 
+def _event_to_dict(e: EventRecord) -> dict:
+    return {
+        "id": e.id,
+        "job_id": e.job_id,
+        "observed_at": e.observed_at.isoformat(),
+        "frame_index": e.frame_index,
+        "pts_ms": e.pts_ms,
+        "agent": e.agent.value,
+        "event_type": e.event_type,
+        "severity": e.severity,
+        "payload": e.payload,
+    }
+
+
 @router.get("/jobs/{job_id}/events")
-async def get_job_events(job_id: str, store: StoreDep) -> list[dict]:
+async def get_job_events(
+    job_id: str,
+    store: StoreDep,
+    limit: int = 50,
+    after_id: int = 0,
+    legacy: bool = False,
+) -> dict | list[dict]:
+    """
+    Paginated events: ``after_id`` is exclusive (return rows with id > after_id).
+    Set ``legacy=true`` for a full non-paginated list (may be large).
+    """
     try:
         await store.get_job(job_id)
     except KeyError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    events = await store.list_events(job_id)
-    return [
-        {
-            "id": e.id,
-            "job_id": e.job_id,
-            "observed_at": e.observed_at.isoformat(),
-            "frame_index": e.frame_index,
-            "pts_ms": e.pts_ms,
-            "agent": e.agent.value,
-            "event_type": e.event_type,
-            "severity": e.severity,
-            "payload": e.payload,
-        }
-        for e in events
-    ]
+
+    if legacy:
+        events = await store.list_events(job_id)
+        return [_event_to_dict(e) for e in events]
+
+    lim = min(max(limit, 1), 200)
+    rows = await store.list_events_page(job_id, after_id=max(0, after_id), limit=lim)
+    items = [_event_to_dict(e) for e in rows]
+    next_after = rows[-1].id if rows and len(rows) == lim else None
+    return {"items": items, "next_after_id": next_after}
+
+
+@router.get("/jobs/{job_id}/summary")
+async def get_job_summary(job_id: str, store: StoreDep) -> dict:
+    try:
+        job = await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    if job.summary is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No summary yet (job still running, failed before analysis, or pre-migration job).",
+        )
+    return job.summary
 
 
 def _ingest_root(settings: Settings) -> Path:

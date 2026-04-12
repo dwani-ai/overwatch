@@ -61,6 +61,14 @@ class JobStore:
             raise KeyError(job_id)
         return self._row_to_job(row)
 
+    async def set_job_summary(self, job_id: str, summary: dict[str, Any]) -> None:
+        now = _iso(datetime.now(timezone.utc))
+        await self._conn.execute(
+            "UPDATE jobs SET summary_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(summary), now, job_id),
+        )
+        await self._conn.commit()
+
     async def list_jobs(self, *, limit: int = 50) -> list[JobRecord]:
         cur = await self._conn.execute(
             "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?",
@@ -151,6 +159,26 @@ class JobStore:
         rows = await cur.fetchall()
         return [self._row_to_event(r) for r in rows]
 
+    async def list_events_page(
+        self,
+        job_id: str,
+        *,
+        after_id: int = 0,
+        limit: int = 50,
+    ) -> list[EventRecord]:
+        lim = max(1, min(limit, 200))
+        cur = await self._conn.execute(
+            """
+            SELECT * FROM events
+            WHERE job_id = ? AND id > ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (job_id, after_id, lim),
+        )
+        rows = await cur.fetchall()
+        return [self._row_to_event(r) for r in rows]
+
     async def has_active_job_for_path(self, path: str) -> bool:
         cur = await self._conn.execute(
             """
@@ -190,6 +218,11 @@ class JobStore:
         await self._conn.commit()
 
     def _row_to_job(self, row: aiosqlite.Row) -> JobRecord:
+        try:
+            raw_summary = row["summary_json"]
+        except (KeyError, IndexError, TypeError):
+            raw_summary = None
+        summary = json.loads(raw_summary) if raw_summary else None
         return JobRecord(
             id=str(row["id"]),
             source_type=SourceType(str(row["source_type"])),
@@ -199,6 +232,7 @@ class JobStore:
             updated_at=_parse_iso(str(row["updated_at"])),
             error=row["error"],
             meta=json.loads(row["meta_json"] or "{}"),
+            summary=summary,
         )
 
     def _row_to_event(self, row: aiosqlite.Row) -> EventRecord:
