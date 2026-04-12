@@ -70,6 +70,7 @@ docker compose up --build
 
 - **API + UI on port 80:** `http://localhost/v1/health`, `http://localhost/v1/jobs`, … — the **`overwatch-api`** container is **not** published on 8080; nginx proxies **`/v1/`**, **`/api/`**, **`/docs`**, **`/redoc`**, **`openapi.json`**, and **`/service`** (same JSON as the API’s `GET /` root).  
 - **UI + gateway (Compose):** `http://localhost/` — React app at `/`; ensure nothing else on the host is bound to port 80. If your Docker setup cannot publish host ports below 1024 (some rootless setups), change `overwatch-ui` in `compose.yml` to e.g. `"8088:80"` and use `http://localhost:8088/` (same paths under that origin).  
+- **Upload 502 / “Host is unreachable”:** nginx re-resolves **`overwatch-api`** via Docker DNS (avoids stale IPs after `compose up --build`). **`overwatch-ui`** waits until the API **`healthcheck`** passes so the backend is listening before the gateway starts. If 502 persists, run `docker compose ps` and check **`overwatch-api`** logs (crash/OOM during large uploads).  
 - Remote vLLM: `https://some-vllm` (no local GPU in default compose)
 
 **Creating a job from the host (Docker):** paths inside the container are **not** the same as on your laptop. The compose file mounts host `./data/ingest` at **`/data/ingest`** in the container. Use either:
