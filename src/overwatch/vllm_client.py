@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -97,6 +98,26 @@ async def fetch_models(
         return VllmCallResult(ok=False, url=url, error=type(e).__name__ + ": " + str(e))
 
 
+def chunk_video_user_messages(*, instruction: str, mp4_bytes: bytes) -> list[dict[str, Any]]:
+    """
+    Build a single user message for OpenAI-style multimodal chat:
+    text + ``video_url`` with MP4 data URI (vLLM / Gemma video inputs).
+    """
+    b64 = base64.standard_b64encode(mp4_bytes).decode("ascii")
+    uri = f"data:video/mp4;base64,{b64}"
+    content: list[dict[str, Any]] = [
+        {"type": "text", "text": instruction},
+        {"type": "video_url", "video_url": {"url": uri}},
+    ]
+    return [{"role": "user", "content": content}]
+
+
+def _http_timeout(timeout_sec: float) -> httpx.Timeout:
+    """Allow long reads/writes for large JSON bodies (base64 video)."""
+    tw = max(timeout_sec, 120.0)
+    return httpx.Timeout(connect=60.0, read=timeout_sec, write=tw, pool=60.0)
+
+
 async def chat_completion(
     openai_base: str,
     *,
@@ -116,7 +137,10 @@ async def chat_completion(
     if max_tokens is not None:
         body["max_tokens"] = max_tokens
     try:
-        async with httpx.AsyncClient(timeout=timeout_sec, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=_http_timeout(timeout_sec),
+            follow_redirects=True,
+        ) as client:
             r = await client.post(url, headers=_headers(api_key), json=body)
             if r.status_code >= 400:
                 return VllmCallResult(
