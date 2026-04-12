@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import type { AgentKind, AgentRunPublic, JobRecord, RiskReviewResult, SynthesisResult } from "./api";
+import type {
+  AgentKind,
+  AgentRunPublic,
+  IncidentBriefResult,
+  JobRecord,
+  RiskReviewResult,
+  SynthesisResult,
+} from "./api";
 import {
   createAgentRun,
   getJob,
@@ -27,21 +34,36 @@ export default function App() {
   const [job, setJob] = useState<JobRecord | null>(null);
   const [summary, setSummary] = useState<Record<string, unknown> | null>(null);
   const [recentJobs, setRecentJobs] = useState<JobRecord[]>([]);
+  const [recentJobsLoading, setRecentJobsLoading] = useState(false);
+  const [recentJobsError, setRecentJobsError] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [phase, setPhase] = useState<string>("");
 
   const refreshRecentJobs = useCallback(async () => {
+    setRecentJobsError(null);
+    setRecentJobsLoading(true);
     try {
       const rows = await listJobs(40);
       setRecentJobs(rows);
-    } catch {
-      setRecentJobs([]);
+    } catch (e) {
+      setRecentJobsError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRecentJobsLoading(false);
     }
   }, []);
 
   useEffect(() => {
     refreshRecentJobs();
   }, [refreshRecentJobs]);
+
+  useEffect(() => {
+    const busy = recentJobs.some((j) => j.status === "pending" || j.status === "processing");
+    if (!busy) return;
+    const t = setInterval(() => {
+      refreshRecentJobs();
+    }, 2500);
+    return () => clearInterval(t);
+  }, [recentJobs, refreshRecentJobs]);
 
   const openJob = useCallback(async (jobId: string) => {
     setErr(null);
@@ -134,13 +156,23 @@ export default function App() {
           Past uploads stay in the API — select one to view chunk results and agent history.
         </p>
         <div className="recent-jobs-toolbar">
-          <button type="button" className="linkish" onClick={() => refreshRecentJobs()}>
-            Refresh list
+          <button
+            type="button"
+            className="linkish"
+            disabled={recentJobsLoading}
+            onClick={() => refreshRecentJobs()}
+          >
+            {recentJobsLoading ? "Refreshing…" : "Refresh list"}
           </button>
         </div>
-        {recentJobs.length === 0 ? (
-          <p className="muted small">No jobs yet (or still loading).</p>
-        ) : (
+        {recentJobsError ? <p className="error small">{recentJobsError}</p> : null}
+        {recentJobsLoading && recentJobs.length === 0 ? (
+          <p className="phase small">Loading recent jobs…</p>
+        ) : null}
+        {!recentJobsLoading && !recentJobsError && recentJobs.length === 0 ? (
+          <p className="muted small">No jobs yet.</p>
+        ) : null}
+        {recentJobs.length > 0 ? (
           <ul className="recent-jobs">
             {recentJobs.map((j) => (
               <li key={j.id}>
@@ -157,7 +189,7 @@ export default function App() {
               </li>
             ))}
           </ul>
-        )}
+        ) : null}
       </section>
 
       <section className="card">
@@ -283,6 +315,16 @@ function AgentsPanel({ jobId }: { jobId: string }) {
         render={(r) => <RiskReviewBody result={r as RiskReviewResult} />}
         previewRisk={previewRiskRun}
       />
+      <AgentAsyncBlock
+        jobId={jobId}
+        agent="incident_brief"
+        title="Incident brief agent"
+        blurb="Short incident-style narrative and follow-ups from the summary (no identities)."
+        runs={allRuns.filter((r) => r.agent === "incident_brief")}
+        onRefreshRuns={refreshRuns}
+        render={(r) => <IncidentBriefBody result={r as IncidentBriefResult} />}
+        previewIncidentBrief={previewIncidentBriefRun}
+      />
     </div>
   );
 }
@@ -307,6 +349,14 @@ function previewRiskRun(result: Record<string, unknown> | null): string {
   return r;
 }
 
+function previewIncidentBriefRun(result: Record<string, unknown> | null): string {
+  if (!result) return "";
+  const n = result.narrative;
+  if (typeof n !== "string" || !n.trim()) return "";
+  const t = n.trim();
+  return t.length > 160 ? `${t.slice(0, 160)}…` : t;
+}
+
 function AgentAsyncBlock({
   jobId,
   agent,
@@ -317,6 +367,7 @@ function AgentAsyncBlock({
   render,
   previewSynthesis,
   previewRisk,
+  previewIncidentBrief,
 }: {
   jobId: string;
   agent: AgentKind;
@@ -327,6 +378,7 @@ function AgentAsyncBlock({
   render: (result: Record<string, unknown>) => ReactNode;
   previewSynthesis?: (result: Record<string, unknown> | null) => string;
   previewRisk?: (result: Record<string, unknown> | null) => string;
+  previewIncidentBrief?: (result: Record<string, unknown> | null) => string;
 }) {
   const [openIds, setOpenIds] = useState<Record<string, boolean>>({});
   const [phase, setPhase] = useState<string>("");
@@ -336,7 +388,9 @@ function AgentAsyncBlock({
   const preview =
     agent === "synthesis"
       ? previewSynthesis ?? (() => "")
-      : previewRisk ?? (() => "");
+      : agent === "risk_review"
+        ? previewRisk ?? (() => "")
+        : previewIncidentBrief ?? (() => "");
 
   const toggleOpen = (id: string) => {
     setOpenIds((o) => ({ ...o, [id]: !o[id] }));
@@ -356,7 +410,7 @@ function AgentAsyncBlock({
         setPhase("");
         return;
       }
-      if (done.meta?.cached) setPhase("Served from cache (no new LLM call).");
+      if (done.meta?.cached) setPhase("Served from cache (no new LLM call for this agent).");
       else setPhase("");
       if (done.result) setOpenIds((o) => ({ ...o, [done.id]: true }));
     } catch (e) {
@@ -449,6 +503,17 @@ function RiskReviewBody({ result }: { result: RiskReviewResult }) {
       {result.operator_notes ? <p className="scene">{result.operator_notes}</p> : null}
       <StringList title="Risk factors" items={result.risk_factors} />
       <StringList title="Mitigations" items={result.mitigations_suggested} />
+    </>
+  );
+}
+
+function IncidentBriefBody({ result }: { result: IncidentBriefResult }) {
+  return (
+    <>
+      <p className="scene">{result.narrative}</p>
+      <StringList title="Key moments" items={result.key_moments} />
+      <StringList title="Situational factors" items={result.situational_factors} />
+      <StringList title="Suggested follow-ups" items={result.suggested_followups} />
     </>
   );
 }

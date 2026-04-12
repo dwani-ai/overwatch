@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -320,6 +320,31 @@ class JobStore:
             (status.value, now, error, result_json, event_id, meta_json, run_id),
         )
         await self._conn.commit()
+
+    async def fail_stale_agent_runs(self, *, older_than_sec: float) -> int:
+        """
+        Mark ``processing`` runs whose ``updated_at`` is older than ``older_than_sec`` as ``failed``.
+        Covers worker crashes and deploys where ``finish_agent_run`` never ran.
+        """
+        now_dt = datetime.now(timezone.utc)
+        cutoff = now_dt - timedelta(seconds=older_than_sec)
+        cutoff_iso = _iso(cutoff)
+        now = _iso(now_dt)
+        msg = (
+            "Stale agent run: remained in processing too long "
+            "(worker restart, hang, or timeout). Re-queue with a new run if needed."
+        )
+        cur = await self._conn.execute(
+            """
+            UPDATE agent_runs
+            SET status = ?, updated_at = ?, error = ?
+            WHERE status = ? AND updated_at < ?
+            """,
+            (AgentRunStatus.failed.value, now, msg, AgentRunStatus.processing.value, cutoff_iso),
+        )
+        await self._conn.commit()
+        rc = cur.rowcount
+        return int(rc) if rc is not None and rc >= 0 else 0
 
     async def _fetch_agent_run_row(self, run_id: str) -> aiosqlite.Row | None:
         cur = await self._conn.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,))

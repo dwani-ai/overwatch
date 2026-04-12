@@ -257,9 +257,35 @@ class RiskReviewAgentResult(BaseModel):
     mitigations_suggested: list[str] = Field(default_factory=list, max_length=12)
 
 
+class IncidentBriefAgentResult(BaseModel):
+    """Incident-style narrative from the job summary JSON (no identities, no new video)."""
+
+    schema_version: Literal["1"] = "1"
+    narrative: str = Field(
+        default="",
+        description="Short what-happened story for handoff (2–6 sentences).",
+    )
+    key_moments: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+        description="Timestamp-free bullet highlights from the summary.",
+    )
+    situational_factors: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+        description="Environment, flow, or context factors (not blame).",
+    )
+    suggested_followups: list[str] = Field(
+        default_factory=list,
+        max_length=10,
+        description="Concrete checks or next steps.",
+    )
+
+
 class AgentKind(str, Enum):
     synthesis = "synthesis"
     risk_review = "risk_review"
+    incident_brief = "incident_brief"
 
 
 class AgentRunStatus(str, Enum):

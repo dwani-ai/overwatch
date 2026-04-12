@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
+from overwatch.agents.incident_brief import AGENT_INCIDENT_BRIEF_EVENT, run_incident_brief_agent
 from overwatch.agents.risk_review import AGENT_RISK_REVIEW_EVENT, run_risk_review_agent
 from overwatch.agents.synthesis import AGENT_SYNTHESIS_EVENT, run_synthesis_agent
 from overwatch.config import Settings
@@ -12,14 +14,18 @@ from overwatch.store import JobStore
 
 logger = logging.getLogger(__name__)
 
+_STALE_SWEEP_INTERVAL_SEC = 30.0
+
 _EVENT_TYPE: dict[AgentKind, str] = {
     AgentKind.synthesis: AGENT_SYNTHESIS_EVENT,
     AgentKind.risk_review: AGENT_RISK_REVIEW_EVENT,
+    AgentKind.incident_brief: AGENT_INCIDENT_BRIEF_EVENT,
 }
 
 _AGENT_PAYLOAD_ID: dict[AgentKind, str] = {
     AgentKind.synthesis: "synthesis",
     AgentKind.risk_review: "risk_review",
+    AgentKind.incident_brief: "incident_brief",
 }
 
 
@@ -87,8 +93,17 @@ async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOu
 
     if run.agent == AgentKind.synthesis:
         result_model, meta = await run_synthesis_agent(settings, job.summary)
-    else:
+    elif run.agent == AgentKind.risk_review:
         result_model, meta = await run_risk_review_agent(settings, job.summary)
+    elif run.agent == AgentKind.incident_brief:
+        result_model, meta = await run_incident_brief_agent(settings, job.summary)
+    else:
+        await store.finish_agent_run(
+            run_id,
+            status=AgentRunStatus.failed,
+            error=f"Unsupported agent kind: {run.agent.value}",
+        )
+        return
 
     payload: dict[str, Any] = {
         "agent_id": _AGENT_PAYLOAD_ID[run.agent],
@@ -129,10 +144,17 @@ async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOu
 async def agent_worker_loop(store: JobStore, settings: Settings, stop: asyncio.Event) -> None:
     """Poll for pending ``agent_runs`` rows and process them sequentially."""
     interval = settings.agent_worker_poll_interval_sec
+    last_stale_sweep = 0.0
     while not stop.is_set():
         try:
             run = await store.claim_next_agent_run()
             if run is None:
+                now_m = time.monotonic()
+                if now_m - last_stale_sweep >= _STALE_SWEEP_INTERVAL_SEC:
+                    last_stale_sweep = now_m
+                    n = await store.fail_stale_agent_runs(older_than_sec=settings.agent_run_stale_sec)
+                    if n:
+                        logger.info("Marked %s stale agent run(s) as failed", n)
                 await asyncio.sleep(interval)
                 continue
             try:

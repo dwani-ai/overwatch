@@ -40,6 +40,12 @@ class Settings(BaseSettings):
 
     worker_poll_interval_sec: float = Field(default=1.0, ge=0.2)
     agent_worker_poll_interval_sec: float = Field(default=0.4, ge=0.1, le=10.0)
+    # Mark agent_runs stuck in ``processing`` longer than this as failed (worker crash / deploy).
+    agent_run_stale_sec: float = Field(default=900.0, ge=120.0, le=86400.0)
+    # Multipart upload body limit (align with nginx ``client_max_body_size``).
+    max_upload_bytes: int = Field(default=536_870_912, ge=10_485_760, le=2_147_483_648)  # default 512 MiB
+    # Per-client request cap (by IP / X-Forwarded-For). 0 = disabled.
+    api_rate_limit_per_minute: int = Field(default=0, ge=0, le=10_000)
 
     # Comma-separated origins for browser UI (http://localhost omits :80; include :3000 if you remap the UI port)
     cors_origins: str = Field(
