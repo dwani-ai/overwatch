@@ -1,0 +1,61 @@
+services:
+  # Optional local GPU vLLM. Default stack uses hosted API (see overwatch-api VLLM_BASE_URL).
+  vllm-server:
+    profiles: ["local-vllm"]
+    image: dwani/vllm-gemma4-audio
+    container_name: gemma4-vllm-server-1
+    shm_size: "4gb"
+    environment:
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      - HF_TOKEN=${HF_TOKEN}
+      - LD_LIBRARY_PATH=/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+    ports:
+      - "10802:10802"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    command: >
+      --model google/gemma-4-E4B-it
+      --served-model-name gemma4
+      --host 0.0.0.0
+      --port 10802
+      --trust-remote-code
+      --enforce-eager
+      --gpu-memory-utilization 0.85
+      --max-model-len 8192
+      --max-num-seqs 16
+      --enable-chunked-prefill
+      --enable-prefix-caching
+      --chat-template-content-format openai
+      --tool-call-parser gemma4
+      --reasoning-parser gemma4
+      --enable-auto-tool-choice
+      --limit-mm-per-prompt '{"image":2,"video":1,"audio":1}'
+      --default-chat-template-kwargs '{"enable_thinking": false}'
+
+  overwatch-api:
+    build: .
+    container_name: overwatch-api
+    ports:
+      - "8080:8080"
+    environment:
+      - DATA_DIR=/data/overwatch
+      - INGEST_DIR=/data/ingest
+      - VLLM_BASE_URL=https://vllm-video-api.dwani.ai/ai/v1
+      - VLLM_MODEL=${VLLM_MODEL:-gemma4}
+      - VLLM_API_KEY=${VLLM_API_KEY}
+      - VLLM_CHAT_TIMEOUT_SEC=120
+      - INGEST_POLL_INTERVAL_SEC=5
+      - INGEST_STABLE_SEC=2
+      - WORKER_POLL_INTERVAL_SEC=1
+    volumes:
+      - ./data/ingest:/data/ingest
+      - ./data/overwatch:/data/overwatch
+    restart: unless-stopped
