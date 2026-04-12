@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import uuid
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
@@ -258,7 +258,7 @@ async def post_job_synthesis(
     store: StoreDep,
     force: bool = False,
     blocking: bool = False,
-) -> dict | JSONResponse:
+) -> Any:
     """
     Run the **synthesis** orchestrator.
 
