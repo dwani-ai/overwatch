@@ -43,3 +43,13 @@ class GameAction(BaseModel):
 
     keys: list[str] | None = None
     """Sequence of key names when ``type`` is ``keys``."""
+
+
+class FactorioPlan(BaseModel):
+    """Planner output: one structured action plus optional reasoning (logged, not executed)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    schema_version: Literal["1"] = "1"
+    rationale: str | None = None
+    action: GameAction

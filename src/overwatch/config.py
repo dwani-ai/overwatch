@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     factorio_root: Optional[Path] = Field(default=None)
     factorio_max_actions_per_minute: int = Field(default=30, ge=1, le=600)
     factorio_capture_interval_sec: float = Field(default=2.0, ge=0.2, le=120.0)
+    factorio_settle_sec: float = Field(default=1.0, ge=0.0, le=120.0)
+    factorio_confidence_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
+    factorio_tech_tree_path: Optional[Path] = Field(default=None)
 
     # Comma-separated origins for browser UI (http://localhost omits :80; include :3000 if you remap the UI port)
     cors_origins: str = Field(

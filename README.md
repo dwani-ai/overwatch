@@ -148,6 +148,9 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 | `FACTORIO_ROOT` | _(unset)_ | Session + frame store root; default is `DATA_DIR/factorio` |
 | `FACTORIO_MAX_ACTIONS_PER_MINUTE` | `30` | Cap for `overwatch.factorio.SkillExecutor` when not in dry-run |
 | `FACTORIO_CAPTURE_INTERVAL_SEC` | `2` | Default interval for `overwatch.factorio.capture_loop` |
+| `FACTORIO_SETTLE_SEC` | `1` | Sleep after each agent step (after executing an action) |
+| `FACTORIO_CONFIDENCE_THRESHOLD` | `0.25` | Skip planner when `FactorioState.confidence` is below this |
+| `FACTORIO_TECH_TREE_PATH` | _(unset)_ | Optional JSON file for planner grounding (see `evals/factorio_data/tech_tree_minimal.json`) |
 | `MAX_UPLOAD_BYTES` | `536870912` | Multipart upload cap (default 512 MiB; align with reverse proxy `client_max_body_size`) |
 | `AGENT_RUN_STALE_SEC` | `900` | Agent runs stuck in `processing` longer than this are marked failed (worker restart / hang) |
 | `API_RATE_LIMIT_PER_MINUTE` | `0` | Per-IP (or `X-Forwarded-For`) cap over 60s; `0` disables |
@@ -159,6 +162,10 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 | `CORS_ORIGINS` | `http://localhost:5173,...` | Comma-separated browser origins for the API; use `*` to allow all (dev only). Needed when the UI origin differs from the API (e.g. Vite on 5173). The Compose gateway on port 80 uses same-origin `/api` and does not rely on CORS. |
 
 Set `VLLM_BASE_URL=` empty to skip all vLLM calls (probe + chat).
+
+**Factorio research agent (lab):** with `PYTHONPATH=src` and `VLLM_BASE_URL` set,  
+`python -m overwatch.factorio --goal "Your objective" --max-steps 5`  
+runs capture → state parse → planner → executor. Default is **dry-run** (no key events). Use **`--execute`** only on an isolated machine with **pyautogui** installed. **Ctrl+C** stops between steps. Optional: `--tech-tree path.json`, `--session-id <uuid>` to append to an existing session. The text planner reuses **`VLLM_AGENT_MAX_TOKENS`** and **`VLLM_AGENT_TIMEOUT_SEC`**.
 
 **API quick reference**
 
