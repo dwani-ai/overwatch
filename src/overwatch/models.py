@@ -377,6 +377,36 @@ class AgentRunCreate(BaseModel):
     force: bool = False
 
 
+class IndustryPack(str, Enum):
+    """
+    Vertical pack for **named** multi-agent pipelines (curated agent order per industry).
+
+    Uses static graphs — predictable, versionable, and easy to evaluate before adding LLM routing.
+    """
+
+    general = "general"
+    retail_qsr = "retail_qsr"
+    logistics_warehouse = "logistics_warehouse"
+    manufacturing = "manufacturing"
+    commercial_real_estate = "commercial_real_estate"
+    transportation_hubs = "transportation_hubs"
+    critical_infrastructure = "critical_infrastructure"
+    banking_atm = "banking_atm"
+    hospitality_venues = "hospitality_venues"
+    education_campus = "education_campus"
+    healthcare_facilities = "healthcare_facilities"
+
+
+class AgentOrchestrateIndustryCreate(BaseModel):
+    """Start a linear orchestration using the curated pipeline for ``industry``."""
+
+    industry: IndustryPack
+    force: bool = Field(
+        default=False,
+        description="If true, each step bypasses cached orchestrator events.",
+    )
+
+
 class AgentOrchestrateCreate(BaseModel):
     """
     Run job-level agents **in order** (linear pipeline).
@@ -412,6 +442,10 @@ class AgentOrchestrationOut(BaseModel):
     steps: list[AgentKind]
     current_step: int
     force: bool = False
+    industry_pack: IndustryPack | None = Field(
+        default=None,
+        description="Named vertical pack when the run was started via industry orchestration.",
+    )
     error: str | None = None
     created_at: datetime
     updated_at: datetime

@@ -4,6 +4,7 @@ import type {
   AgentRunPublic,
   ComplianceBriefResult,
   IncidentBriefResult,
+  IndustryPack,
   JobRecord,
   LossPreventionResult,
   PerimeterChainResult,
@@ -17,11 +18,13 @@ import {
   DEFAULT_AGENT_PIPELINE,
   getJob,
   getSummary,
+  INDUSTRY_PACK_OPTIONS,
   listJobAgentRuns,
   listJobs,
   pollAgentOrchestration,
   pollAgentRun,
   startAgentOrchestration,
+  startIndustryOrchestration,
   uploadVideo,
 } from "./api";
 import "./App.css";
@@ -281,6 +284,7 @@ function AgentsPanel({ jobId }: { jobId: string }) {
   const [orchPhase, setOrchPhase] = useState("");
   const [orchErr, setOrchErr] = useState<string | null>(null);
   const [orchBusy, setOrchBusy] = useState(false);
+  const [industryPick, setIndustryPick] = useState<IndustryPack>("general");
 
   const refreshRuns = useCallback(async () => {
     try {
@@ -334,15 +338,79 @@ function AgentsPanel({ jobId }: { jobId: string }) {
     }
   };
 
+  const runNamedIndustryPipeline = async (force: boolean) => {
+    setOrchErr(null);
+    setOrchPhase("");
+    setOrchBusy(true);
+    try {
+      const q = await startIndustryOrchestration(jobId, industryPick, force);
+      const label = INDUSTRY_PACK_OPTIONS.find((o) => o.value === industryPick)?.label ?? industryPick;
+      setOrchPhase(
+        `${label}: ${q.steps.join(" → ")}… (${q.orchestration_id.slice(0, 8)}…)`,
+      );
+      const long = q.steps.length > 4;
+      const done = await pollAgentOrchestration(q.orchestration_id, {
+        intervalMs: long ? 2000 : 1200,
+        maxWaitMs: long ? 1_800_000 : 900_000,
+      });
+      await refreshRuns();
+      if (done.status === "failed") {
+        setOrchErr(done.error || "Orchestration failed");
+        setOrchPhase("");
+        return;
+      }
+      setOrchPhase("Industry pipeline completed.");
+    } catch (e) {
+      setOrchErr(e instanceof Error ? e.message : String(e));
+      setOrchPhase("");
+    } finally {
+      setOrchBusy(false);
+    }
+  };
+
   return (
     <div className="agents-panel">
       <div className="synthesis agent-block orchestration-block">
         <h3 className="synthesis-title">Orchestrated pipelines</h3>
         <p className="muted small">
           <strong>Core (3)</strong>: synthesis → risk review → incident brief.{" "}
-          <strong>Cross-industry (7)</strong>: adds compliance, loss prevention, perimeter chain, and privacy
-          review — longer and more LLM calls.
+          <strong>Cross-industry (7)</strong>: all agents in one fixed order.{" "}
+          <strong>Industry pipeline</strong>: same agents, <em>reordered per vertical</em> (named static graph —
+          auditable in code).
         </p>
+        <div className="orchestration-industry">
+          <label className="label small">Industry vertical</label>
+          <select
+            className="industry-select"
+            value={industryPick}
+            disabled={orchBusy}
+            onChange={(e) => setIndustryPick(e.target.value as IndustryPack)}
+          >
+            {INDUSTRY_PACK_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <div className="synthesis-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={orchBusy}
+              onClick={() => runNamedIndustryPipeline(false)}
+            >
+              Run industry pipeline
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={orchBusy}
+              onClick={() => runNamedIndustryPipeline(true)}
+            >
+              Force industry pipeline
+            </button>
+          </div>
+        </div>
         <div className="synthesis-actions">
           <button
             type="button"

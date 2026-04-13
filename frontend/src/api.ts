@@ -164,6 +164,34 @@ export const CROSS_INDUSTRY_AGENT_PIPELINE: AgentKind[] = [
   "privacy_review",
 ];
 
+/** Vertical pack for curated multi-agent order (matches API ``IndustryPack``). */
+export type IndustryPack =
+  | "general"
+  | "retail_qsr"
+  | "logistics_warehouse"
+  | "manufacturing"
+  | "commercial_real_estate"
+  | "transportation_hubs"
+  | "critical_infrastructure"
+  | "banking_atm"
+  | "hospitality_venues"
+  | "education_campus"
+  | "healthcare_facilities";
+
+export const INDUSTRY_PACK_OPTIONS: { value: IndustryPack; label: string }[] = [
+  { value: "general", label: "General — all seven agents (baseline graph)" },
+  { value: "retail_qsr", label: "Retail & QSR" },
+  { value: "logistics_warehouse", label: "Logistics & warehouse" },
+  { value: "manufacturing", label: "Manufacturing" },
+  { value: "commercial_real_estate", label: "Commercial real estate / campus" },
+  { value: "transportation_hubs", label: "Transportation hubs" },
+  { value: "critical_infrastructure", label: "Critical infrastructure / utilities" },
+  { value: "banking_atm", label: "Banking & ATM / branch" },
+  { value: "hospitality_venues", label: "Hospitality & venues" },
+  { value: "education_campus", label: "Education campus" },
+  { value: "healthcare_facilities", label: "Healthcare facilities" },
+];
+
 export type AgentOrchestrationPublic = {
   id: string;
   job_id: string;
@@ -172,6 +200,7 @@ export type AgentOrchestrationPublic = {
   current_step: number;
   total_steps: number;
   force: boolean;
+  industry_pack?: IndustryPack | null;
   error: string | null;
   created_at: string;
   updated_at: string;
@@ -185,6 +214,7 @@ export type AgentOrchestrateAccepted = {
   current_step: number;
   total_steps: number;
   force: boolean;
+  industry_pack?: IndustryPack | null;
   head_run_id: string;
   poll_url: string;
   head_run_poll_url: string;
@@ -200,6 +230,22 @@ export async function startAgentOrchestration(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ steps, force }),
+  });
+  if (r.status !== 202) {
+    throw new Error(formatHttpError(r.status, await r.text()));
+  }
+  return r.json();
+}
+
+export async function startIndustryOrchestration(
+  jobId: string,
+  industry: IndustryPack,
+  force = false,
+): Promise<AgentOrchestrateAccepted> {
+  const r = await apiFetch(`/jobs/${jobId}/agent-runs/orchestrate/industry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ industry, force }),
   });
   if (r.status !== 202) {
     throw new Error(formatHttpError(r.status, await r.text()));

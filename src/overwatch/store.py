@@ -17,6 +17,7 @@ from overwatch.models import (
     AgentRunStatus,
     AgentTrack,
     EventRecord,
+    IndustryPack,
     JobRecord,
     JobStatus,
     SourceType,
@@ -273,6 +274,7 @@ class JobStore:
         steps: list[AgentKind],
         *,
         force: bool = False,
+        industry_pack: IndustryPack | None = None,
     ) -> tuple[AgentOrchestrationOut, AgentRunOut]:
         """
         Create orchestration row and enqueue the **first** step in one transaction.
@@ -296,9 +298,9 @@ class JobStore:
             await self._conn.execute(
                 """
                 INSERT INTO agent_orchestrations (
-                    id, job_id, status, steps_json, current_step, force_run, error, created_at, updated_at
+                    id, job_id, status, steps_json, current_step, force_run, industry_pack, error, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
                 """,
                 (
                     orch_id,
@@ -307,6 +309,7 @@ class JobStore:
                     steps_json,
                     0,
                     1 if force else 0,
+                    industry_pack.value if industry_pack is not None else None,
                     now,
                     now,
                 ),
@@ -420,6 +423,16 @@ class JobStore:
     def _row_to_agent_orch(self, row: aiosqlite.Row) -> AgentOrchestrationOut:
         raw_steps = row["steps_json"]
         step_strs: list[str] = json.loads(raw_steps) if raw_steps else []
+        ind: IndustryPack | None = None
+        try:
+            raw_ind = row["industry_pack"]
+        except (KeyError, IndexError, TypeError):
+            raw_ind = None
+        if raw_ind:
+            try:
+                ind = IndustryPack(str(raw_ind))
+            except ValueError:
+                ind = None
         return AgentOrchestrationOut(
             id=str(row["id"]),
             job_id=str(row["job_id"]),
@@ -427,6 +440,7 @@ class JobStore:
             steps=[AgentKind(s) for s in step_strs],
             current_step=int(row["current_step"]),
             force=bool(row["force_run"]),
+            industry_pack=ind,
             error=row["error"],
             created_at=_parse_iso(str(row["created_at"])),
             updated_at=_parse_iso(str(row["updated_at"])),

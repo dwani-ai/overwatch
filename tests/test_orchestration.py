@@ -5,7 +5,8 @@ import unittest
 from pathlib import Path
 
 from overwatch.agents.orchestration import notify_agent_orchestration_terminal
-from overwatch.models import AgentKind, AgentOrchestrationStatus, JobStatus, SourceType
+from overwatch.industry_pipelines import pipeline_for
+from overwatch.models import AgentKind, AgentOrchestrationStatus, IndustryPack, JobStatus, SourceType
 from overwatch.store import open_store
 
 
@@ -31,6 +32,33 @@ class TestOrchestrationStore(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(head.agent, AgentKind.synthesis)
                 self.assertEqual(head.meta.get("orch_step"), 0)
                 self.assertEqual(head.meta.get("orchestration_id"), orch.id)
+                self.assertIsNone(orch.industry_pack)
+            finally:
+                await conn.close()
+
+    async def test_industry_pack_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            conn, store = await open_store(Path(d))
+            try:
+                job = await store.create_job(
+                    source_type=SourceType.file,
+                    source_path="/tmp/x.mp4",
+                    meta={},
+                )
+                await store.update_job_status(job.id, JobStatus.completed)
+                steps = pipeline_for(IndustryPack.retail_qsr)
+                orch, head = await store.start_agent_orchestration(
+                    job.id,
+                    steps,
+                    force=False,
+                    industry_pack=IndustryPack.retail_qsr,
+                )
+                self.assertEqual(orch.industry_pack, IndustryPack.retail_qsr)
+                again = await store.get_agent_orchestration(orch.id)
+                self.assertIsNotNone(again)
+                assert again is not None
+                self.assertEqual(again.industry_pack, IndustryPack.retail_qsr)
+                self.assertEqual(head.agent, steps[0])
             finally:
                 await conn.close()
 

@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS agent_orchestrations (
     steps_json TEXT NOT NULL,
     current_step INTEGER NOT NULL DEFAULT 0,
     force_run INTEGER NOT NULL DEFAULT 0,
+    industry_pack TEXT,
     error TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -78,6 +79,11 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
     if "summary_json" not in cols:
         await conn.execute("ALTER TABLE jobs ADD COLUMN summary_json TEXT")
         await conn.commit()
+    cur = await conn.execute("PRAGMA table_info(agent_orchestrations)")
+    orch_cols = {str(r[1]) for r in await cur.fetchall()}
+    if orch_cols and "industry_pack" not in orch_cols:
+        await conn.execute("ALTER TABLE agent_orchestrations ADD COLUMN industry_pack TEXT")
+        await conn.commit()
     cur = await conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_orchestrations'"
     )
@@ -91,6 +97,7 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
                 steps_json TEXT NOT NULL,
                 current_step INTEGER NOT NULL DEFAULT 0,
                 force_run INTEGER NOT NULL DEFAULT 0,
+                industry_pack TEXT,
                 error TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
