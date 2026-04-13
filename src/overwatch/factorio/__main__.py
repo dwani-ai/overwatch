@@ -23,7 +23,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--execute",
         action="store_true",
-        help="Send real key events via pyautogui (default: dry-run only)",
+        help="Send real key/mouse events via pyautogui (default: dry-run only)",
+    )
+    ap.add_argument(
+        "--no-click",
+        action="store_true",
+        help="With --execute: keys/skills only; ignore planner click actions (safer smoke test)",
     )
     ap.add_argument(
         "--tech-tree",
@@ -72,6 +77,7 @@ async def _async_main(settings: Settings, args: argparse.Namespace) -> int:
         ex = SkillExecutor(
             max_actions_per_minute=settings.factorio_max_actions_per_minute,
             dry_run=not args.execute,
+            allow_click=not args.no_click,
         )
         n = await run_factorio_agent(
             settings,

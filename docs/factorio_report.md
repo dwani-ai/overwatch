@@ -37,6 +37,17 @@ PYTHONPATH=src python -m overwatch.factorio --goal "Your objective" --max-steps 
 - **`--tech-tree path.json`:** overrides **`FACTORIO_TECH_TREE_PATH`** for planner grounding.
 - **`--session-id`:** continue under an existing session (must already exist in the local store).
 - **`--monitor`:** mss monitor index (default `1` = primary).
+- **`--no-click`:** with **`--execute`**, disable mouse clicks (keys/skills only).
+
+---
+
+## Running against a live Factorio client
+
+1. **vLLM:** Set **`VLLM_BASE_URL`**, **`VLLM_MODEL`**, and optional **`VLLM_API_KEY`**. The state parser sends **PNG screenshots**; the model must support **image** inputs.
+2. **Display:** Factorio must be visible on the monitor you capture (default **primary**). Put the game **in focus**; borderless fullscreen on that monitor avoids the planner clicking on desktop chrome.
+3. **Dry-run first:** Run without **`--execute`** and inspect logs + session under **`FACTORIO_ROOT`** / **`DATA_DIR/factorio`** (PNGs + SQLite steps).
+4. **Execute:** `pip install -r requirements.txt` includes **pyautogui**. Then add **`--execute`**. Clicks use **PNG coordinates** plus the monitor’s **global origin** so multi-monitor setups stay consistent with **mss**.
+5. **Safety:** **`FACTORIO_MAX_ACTIONS_PER_MINUTE`** caps bursts. **`--no-click`** is useful for a first real run. PyAutoGUI **failsafe** (mouse to a corner) can abort automation.
 
 ---
 

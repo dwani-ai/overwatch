@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable
 
 from overwatch.config import Settings
-from overwatch.factorio.capture import capture_screen_png
+from overwatch.factorio.capture import capture_screen_png_with_offset, png_screen_dimensions
 from overwatch.factorio.executor import SkillExecutor
 from overwatch.factorio.models import FactorioPlan, FactorioState, GameAction, GameActionType
 from overwatch.factorio.planner import plan_next_action
@@ -44,10 +44,10 @@ async def run_factorio_agent(
         else confidence_threshold
     )
 
-    def _capture() -> bytes:
+    def _capture_pack() -> tuple[bytes, int, int]:
         if capture_fn is not None:
-            return capture_fn()
-        return capture_screen_png(monitor=monitor)
+            return capture_fn(), 0, 0
+        return capture_screen_png_with_offset(monitor=monitor)
 
     completed = 0
     frames = store.list_frames(session_id)
@@ -59,8 +59,11 @@ async def run_factorio_agent(
             break
 
         step_index = step0 + i
-        png = await asyncio.to_thread(_capture)
+        png, click_off_x, click_off_y = await asyncio.to_thread(_capture_pack)
         frame_rec = store.append_frame(session_id, step_index, png)
+
+        dims = png_screen_dimensions(png)
+        cap_w, cap_h = (dims[0], dims[1]) if dims else (None, None)
 
         state, parse_raw = await parse_factorio_state_from_png(
             settings,
@@ -89,6 +92,8 @@ async def run_factorio_agent(
                 goal=goal,
                 state=state,
                 tech_tree_text=tech_tree_text,
+                capture_width=cap_w,
+                capture_height=cap_h,
             )
             planner_raw = ptext
             if plan is not None:
@@ -99,7 +104,7 @@ async def run_factorio_agent(
 
         state_json = state.model_dump_json() if state is not None else None
         try:
-            executor.execute(action)
+            executor.execute(action, click_screen_offset=(click_off_x, click_off_y))
         except Exception as e:
             logger.warning("executor failed at step %s: %s", step_index, e)
             err = f"{err}; executor: {e}" if err else f"executor: {e}"

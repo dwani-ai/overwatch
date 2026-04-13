@@ -165,7 +165,7 @@ Set `VLLM_BASE_URL=` empty to skip all vLLM calls (probe + chat).
 
 **Factorio research agent (lab):** with `PYTHONPATH=src` and `VLLM_BASE_URL` set,  
 `python -m overwatch.factorio --goal "Your objective" --max-steps 5`  
-runs capture → state parse → planner → executor. Default is **dry-run** (no key events). Use **`--execute`** only on an isolated machine with **pyautogui** installed. **Ctrl+C** stops between steps. Optional: `--tech-tree path.json`, `--session-id <uuid>` to append to an existing session. The text planner reuses **`VLLM_AGENT_MAX_TOKENS`** and **`VLLM_AGENT_TIMEOUT_SEC`**.
+runs capture → state parse → planner → executor. Default is **dry-run** (no key or mouse events). With **`--execute`**, **pyautogui** sends keys and **left-clicks** (planner outputs `click_x` / `click_y` in **screenshot pixel space**; offsets match the captured monitor). Use only on a **lab machine** with Factorio **focused** (fullscreen or same monitor as `--monitor`). **`--no-click`** keeps keys/skills only. **pyautogui** failsafe: slamming the mouse to a screen corner aborts automation—know that before running. **Ctrl+C** stops between steps. Optional: `--tech-tree path.json`, `--session-id <uuid>`. The text planner reuses **`VLLM_AGENT_MAX_TOKENS`** and **`VLLM_AGENT_TIMEOUT_SEC`**. On Linux you may need OS packages for X11 (e.g. `python3-xlib` / `scrot` stack depending on distro) if `pip install pyautogui` is not enough.
 
 **API quick reference**
 
