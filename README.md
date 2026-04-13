@@ -118,7 +118,9 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 ## Documentation
 
 - **Engineering technical report** (~10 pages): [docs/technical_report.md](docs/technical_report.md) — architecture, data model, chunk and agent pipelines, orchestration and industry packs, API overview, configuration, deployment, testing, and known limitations.
-- **Research evals / backlog / Factorio prototype**: [docs/todo_report.md](docs/todo_report.md) — layered evaluation plan, run cards, and closed-loop game research notes.
+- **Research evaluation plan**: [docs/eval_report.md](docs/eval_report.md) — layered methodology, run cards, rubrics backlog.  
+- **Factorio closed-loop (research)**: [docs/factorio_report.md](docs/factorio_report.md) — prototype scope, phases, parser fixtures.  
+- **Research doc index**: [docs/todo_report.md](docs/todo_report.md) — links to the reports above.
 
 ## Environment variables
 
