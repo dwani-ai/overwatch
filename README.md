@@ -115,6 +115,11 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 - Google Agent Development Kit (planned)  
 - A2A — Agent-to-Agent protocol (planned)  
 
+## Documentation
+
+- **Engineering technical report** (~10 pages): [docs/technical_report.md](docs/technical_report.md) — architecture, data model, chunk and agent pipelines, orchestration and industry packs, API overview, configuration, deployment, testing, and known limitations.
+- **Research evals / backlog / Factorio prototype**: [docs/todo_report.md](docs/todo_report.md) — layered evaluation plan, run cards, and closed-loop game research notes.
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -136,6 +141,11 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 | `VLLM_SPECIALIST_MAX_TOKENS` | `800` | Max tokens per **text specialist** call |
 | `VLLM_AGENT_MAX_TOKENS` | `2048` | Max tokens for job-level text agents (all seven kinds + any future agents) |
 | `VLLM_AGENT_TIMEOUT_SEC` | `120` | HTTP timeout for job-level text agent chat completions |
+| `VLLM_FACTORIO_MAX_TOKENS` | `1024` | Max tokens for Factorio HUD screenshot parser (`overwatch.factorio`) |
+| `VLLM_FACTORIO_TIMEOUT_SEC` | `120` | HTTP timeout for Factorio multimodal parser calls |
+| `FACTORIO_ROOT` | _(unset)_ | Session + frame store root; default is `DATA_DIR/factorio` |
+| `FACTORIO_MAX_ACTIONS_PER_MINUTE` | `30` | Cap for `overwatch.factorio.SkillExecutor` when not in dry-run |
+| `FACTORIO_CAPTURE_INTERVAL_SEC` | `2` | Default interval for `overwatch.factorio.capture_loop` |
 | `MAX_UPLOAD_BYTES` | `536870912` | Multipart upload cap (default 512 MiB; align with reverse proxy `client_max_body_size`) |
 | `AGENT_RUN_STALE_SEC` | `900` | Agent runs stuck in `processing` longer than this are marked failed (worker restart / hang) |
 | `API_RATE_LIMIT_PER_MINUTE` | `0` | Per-IP (or `X-Forwarded-For`) cap over 60s; `0` disables |

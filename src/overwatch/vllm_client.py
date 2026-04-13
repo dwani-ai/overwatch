@@ -113,6 +113,20 @@ def chunk_video_user_messages(*, instruction: str, mp4_bytes: bytes) -> list[dic
     return [{"role": "user", "content": content}]
 
 
+def image_png_user_messages(*, instruction: str, png_bytes: bytes) -> list[dict[str, Any]]:
+    """
+    Build a single user message for OpenAI-style multimodal chat:
+    text + ``image_url`` with PNG data URI (common for screenshot / HUD parsing).
+    """
+    b64 = base64.standard_b64encode(png_bytes).decode("ascii")
+    uri = f"data:image/png;base64,{b64}"
+    content: list[dict[str, Any]] = [
+        {"type": "text", "text": instruction},
+        {"type": "image_url", "image_url": {"url": uri}},
+    ]
+    return [{"role": "user", "content": content}]
+
+
 def _http_timeout(timeout_sec: float) -> httpx.Timeout:
     """Allow long reads/writes for large JSON bodies (base64 video)."""
     tw = max(timeout_sec, 120.0)
