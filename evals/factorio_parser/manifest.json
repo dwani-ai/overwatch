@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "minimal",
+      "image": "fixtures/minimal.png",
+      "expected": "expected/minimal.json"
+    }
+  ]
+}

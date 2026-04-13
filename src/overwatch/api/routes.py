@@ -8,12 +8,20 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
+from overwatch.agents.compliance_brief import AGENT_COMPLIANCE_BRIEF_EVENT
 from overwatch.agents.incident_brief import AGENT_INCIDENT_BRIEF_EVENT
+from overwatch.agents.loss_prevention import AGENT_LOSS_PREVENTION_EVENT
+from overwatch.agents.perimeter_chain import AGENT_PERIMETER_CHAIN_EVENT
+from overwatch.agents.privacy_review import AGENT_PRIVACY_REVIEW_EVENT
 from overwatch.agents.risk_review import AGENT_RISK_REVIEW_EVENT
 from overwatch.agents.synthesis import AGENT_SYNTHESIS_EVENT, run_synthesis_agent
+from overwatch.industry_pipelines import pipeline_for
 from overwatch.config import Settings
 from overwatch.models import (
     AgentKind,
+    AgentOrchestrateCreate,
+    AgentOrchestrateIndustryCreate,
+    AgentOrchestrationOut,
     AgentRunCreate,
     AgentRunOut,
     AgentTrack,
@@ -109,6 +117,51 @@ async def get_job_summary(job_id: str, store: StoreDep) -> dict:
     return job.summary
 
 
+def _agent_orch_public_dict(o: AgentOrchestrationOut) -> dict:
+    return {
+        "id": o.id,
+        "job_id": o.job_id,
+        "status": o.status.value,
+        "steps": [s.value for s in o.steps],
+        "current_step": o.current_step,
+        "total_steps": len(o.steps),
+        "force": o.force,
+        "industry_pack": o.industry_pack.value if o.industry_pack else None,
+        "error": o.error,
+        "created_at": o.created_at.isoformat(),
+        "updated_at": o.updated_at.isoformat(),
+    }
+
+
+async def _get_latest_agent_event_payload(
+    store: JobStore,
+    job_id: str,
+    *,
+    event_type: str,
+    not_found_detail: str,
+) -> dict:
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    ev = await store.get_latest_event(
+        job_id,
+        agent=AgentTrack.orchestrator,
+        event_type=event_type,
+    )
+    if ev is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=not_found_detail)
+    return {
+        "event_id": ev.id,
+        "observed_at": ev.observed_at.isoformat(),
+        "result": ev.payload.get("result"),
+        "error": ev.payload.get("error"),
+        "attempts": ev.payload.get("attempts"),
+        "truncated_input": ev.payload.get("truncated_input"),
+        "model": ev.payload.get("model"),
+    }
+
+
 def _agent_run_public_dict(run: AgentRunOut) -> dict:
     return {
         "id": run.id,
@@ -176,6 +229,121 @@ async def enqueue_agent_run(
             "poll_url": f"/v1/agent-runs/{run.id}",
         },
     )
+
+
+@router.post("/jobs/{job_id}/agent-runs/orchestrate")
+async def orchestrate_agent_runs(
+    job_id: str,
+    request: Request,
+    store: StoreDep,
+    body: AgentOrchestrateCreate,
+) -> JSONResponse:
+    """
+    Start a **sequential** multi-agent run: when each step finishes successfully, the next is enqueued.
+    Poll ``GET /v1/agent-orchestrations/{id}`` for pipeline status and ``GET /v1/agent-runs/{run_id}`` for the active step.
+    """
+    settings: Settings = request.app.state.settings
+    try:
+        job = await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    _require_job_for_agents(job)
+    _require_vllm_configured(settings)
+
+    if await store.job_has_active_agent_orchestration(job_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An orchestration is already running for this job. Wait for it to finish or fail.",
+        )
+
+    orch, head = await store.start_agent_orchestration(job_id, body.steps, force=body.force)
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "orchestration_id": orch.id,
+            "job_id": orch.job_id,
+            "steps": [s.value for s in orch.steps],
+            "status": orch.status.value,
+            "current_step": orch.current_step,
+            "total_steps": len(orch.steps),
+            "force": orch.force,
+            "industry_pack": None,
+            "head_run_id": head.id,
+            "poll_url": f"/v1/agent-orchestrations/{orch.id}",
+            "head_run_poll_url": f"/v1/agent-runs/{head.id}",
+            "detail": "Poll orchestration until status is completed or failed; poll head_run_id while a step runs.",
+        },
+    )
+
+
+@router.post("/jobs/{job_id}/agent-runs/orchestrate/industry")
+async def orchestrate_industry_agent_runs(
+    job_id: str,
+    request: Request,
+    store: StoreDep,
+    body: AgentOrchestrateIndustryCreate,
+) -> JSONResponse:
+    """
+    Start a **named industry pipeline**: a curated agent order for the selected vertical (static graph).
+
+    Prefer this over ad-hoc ``steps`` when you want reproducible, auditable multi-agent runs per industry.
+    """
+    settings: Settings = request.app.state.settings
+    try:
+        job = await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    _require_job_for_agents(job)
+    _require_vllm_configured(settings)
+
+    if await store.job_has_active_agent_orchestration(job_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An orchestration is already running for this job. Wait for it to finish or fail.",
+        )
+
+    steps = pipeline_for(body.industry)
+    orch, head = await store.start_agent_orchestration(
+        job_id,
+        steps,
+        force=body.force,
+        industry_pack=body.industry,
+    )
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "orchestration_id": orch.id,
+            "job_id": orch.job_id,
+            "industry_pack": body.industry.value,
+            "steps": [s.value for s in orch.steps],
+            "status": orch.status.value,
+            "current_step": orch.current_step,
+            "total_steps": len(orch.steps),
+            "force": orch.force,
+            "head_run_id": head.id,
+            "poll_url": f"/v1/agent-orchestrations/{orch.id}",
+            "head_run_poll_url": f"/v1/agent-runs/{head.id}",
+            "detail": "Named vertical pipeline; poll orchestration until completed or failed.",
+        },
+    )
+
+
+@router.get("/agent-orchestrations/{orch_id}")
+async def get_agent_orchestration(orch_id: str, store: StoreDep) -> dict:
+    orch = await store.get_agent_orchestration(orch_id)
+    if orch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orchestration not found")
+    return _agent_orch_public_dict(orch)
+
+
+@router.get("/jobs/{job_id}/agent-orchestrations")
+async def list_job_agent_orchestrations(job_id: str, store: StoreDep, limit: int = 20) -> dict:
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    rows = await store.list_agent_orchestrations_for_job(job_id, limit=min(max(limit, 1), 50))
+    return {"items": [_agent_orch_public_dict(o) for o in rows]}
 
 
 @router.get("/agent-runs/{run_id}")
@@ -255,29 +423,52 @@ async def get_job_risk_review(job_id: str, store: StoreDep) -> dict:
 @router.get("/jobs/{job_id}/agents/incident-brief")
 async def get_job_incident_brief(job_id: str, store: StoreDep) -> dict:
     """Return the latest stored **incident brief** agent output for this job, if any."""
-    try:
-        await store.get_job(job_id)
-    except KeyError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-    ev = await store.get_latest_event(
+    return await _get_latest_agent_event_payload(
+        store,
         job_id,
-        agent=AgentTrack.orchestrator,
         event_type=AGENT_INCIDENT_BRIEF_EVENT,
+        not_found_detail="No incident brief run yet. POST /v1/jobs/{id}/agent-runs with agent=incident_brief.",
     )
-    if ev is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No incident brief run yet. POST /v1/jobs/{id}/agent-runs with agent=incident_brief.",
-        )
-    return {
-        "event_id": ev.id,
-        "observed_at": ev.observed_at.isoformat(),
-        "result": ev.payload.get("result"),
-        "error": ev.payload.get("error"),
-        "attempts": ev.payload.get("attempts"),
-        "truncated_input": ev.payload.get("truncated_input"),
-        "model": ev.payload.get("model"),
-    }
+
+
+@router.get("/jobs/{job_id}/agents/compliance-brief")
+async def get_job_compliance_brief(job_id: str, store: StoreDep) -> dict:
+    return await _get_latest_agent_event_payload(
+        store,
+        job_id,
+        event_type=AGENT_COMPLIANCE_BRIEF_EVENT,
+        not_found_detail="No compliance brief run yet. POST /v1/jobs/{id}/agent-runs with agent=compliance_brief.",
+    )
+
+
+@router.get("/jobs/{job_id}/agents/loss-prevention")
+async def get_job_loss_prevention(job_id: str, store: StoreDep) -> dict:
+    return await _get_latest_agent_event_payload(
+        store,
+        job_id,
+        event_type=AGENT_LOSS_PREVENTION_EVENT,
+        not_found_detail="No loss prevention run yet. POST /v1/jobs/{id}/agent-runs with agent=loss_prevention.",
+    )
+
+
+@router.get("/jobs/{job_id}/agents/perimeter-chain")
+async def get_job_perimeter_chain(job_id: str, store: StoreDep) -> dict:
+    return await _get_latest_agent_event_payload(
+        store,
+        job_id,
+        event_type=AGENT_PERIMETER_CHAIN_EVENT,
+        not_found_detail="No perimeter chain run yet. POST /v1/jobs/{id}/agent-runs with agent=perimeter_chain.",
+    )
+
+
+@router.get("/jobs/{job_id}/agents/privacy-review")
+async def get_job_privacy_review(job_id: str, store: StoreDep) -> dict:
+    return await _get_latest_agent_event_payload(
+        store,
+        job_id,
+        event_type=AGENT_PRIVACY_REVIEW_EVENT,
+        not_found_detail="No privacy review run yet. POST /v1/jobs/{id}/agent-runs with agent=privacy_review.",
+    )
 
 
 @router.post("/jobs/{job_id}/agents/synthesis")

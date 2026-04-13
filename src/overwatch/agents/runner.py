@@ -3,9 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
+from overwatch.agents.compliance_brief import AGENT_COMPLIANCE_BRIEF_EVENT, run_compliance_brief_agent
 from overwatch.agents.incident_brief import AGENT_INCIDENT_BRIEF_EVENT, run_incident_brief_agent
+from overwatch.agents.loss_prevention import AGENT_LOSS_PREVENTION_EVENT, run_loss_prevention_agent
+from overwatch.agents.orchestration import (
+    notify_agent_orchestration_terminal,
+    orchestration_fields,
+)
+from overwatch.agents.perimeter_chain import AGENT_PERIMETER_CHAIN_EVENT, run_perimeter_chain_agent
+from overwatch.agents.privacy_review import AGENT_PRIVACY_REVIEW_EVENT, run_privacy_review_agent
 from overwatch.agents.risk_review import AGENT_RISK_REVIEW_EVENT, run_risk_review_agent
 from overwatch.agents.synthesis import AGENT_SYNTHESIS_EVENT, run_synthesis_agent
 from overwatch.config import Settings
@@ -20,12 +29,35 @@ _EVENT_TYPE: dict[AgentKind, str] = {
     AgentKind.synthesis: AGENT_SYNTHESIS_EVENT,
     AgentKind.risk_review: AGENT_RISK_REVIEW_EVENT,
     AgentKind.incident_brief: AGENT_INCIDENT_BRIEF_EVENT,
+    AgentKind.compliance_brief: AGENT_COMPLIANCE_BRIEF_EVENT,
+    AgentKind.loss_prevention: AGENT_LOSS_PREVENTION_EVENT,
+    AgentKind.perimeter_chain: AGENT_PERIMETER_CHAIN_EVENT,
+    AgentKind.privacy_review: AGENT_PRIVACY_REVIEW_EVENT,
 }
 
 _AGENT_PAYLOAD_ID: dict[AgentKind, str] = {
     AgentKind.synthesis: "synthesis",
     AgentKind.risk_review: "risk_review",
     AgentKind.incident_brief: "incident_brief",
+    AgentKind.compliance_brief: "compliance_brief",
+    AgentKind.loss_prevention: "loss_prevention",
+    AgentKind.perimeter_chain: "perimeter_chain",
+    AgentKind.privacy_review: "privacy_review",
+}
+
+_AgentRunner = Callable[
+    [Settings, dict[str, Any]],
+    Awaitable[tuple[Any, dict[str, Any]]],
+]
+
+_AGENT_RUNNERS: dict[AgentKind, _AgentRunner] = {
+    AgentKind.synthesis: run_synthesis_agent,
+    AgentKind.risk_review: run_risk_review_agent,
+    AgentKind.incident_brief: run_incident_brief_agent,
+    AgentKind.compliance_brief: run_compliance_brief_agent,
+    AgentKind.loss_prevention: run_loss_prevention_agent,
+    AgentKind.perimeter_chain: run_perimeter_chain_agent,
+    AgentKind.privacy_review: run_privacy_review_agent,
 }
 
 
@@ -36,6 +68,8 @@ def _clean_meta(meta: dict[str, Any]) -> dict[str, Any]:
 async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOut) -> None:
     """Execute one claimed agent run (LLM + event + ``agent_runs`` row update)."""
     run_id = run.id
+    orch_base = orchestration_fields(run.meta)
+
     try:
         job = await store.get_job(run.job_id)
     except KeyError:
@@ -43,26 +77,47 @@ async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOu
             run_id,
             status=AgentRunStatus.failed,
             error="Job not found",
+            meta=orch_base,
+        )
+        await notify_agent_orchestration_terminal(
+            store, run.job_id, run.meta, success=False, error="Job not found"
         )
         return
 
     if job.status != JobStatus.completed or not job.summary:
+        msg = "Job must be completed with a summary before running agents"
         await store.finish_agent_run(
             run_id,
             status=AgentRunStatus.failed,
-            error="Job must be completed with a summary before running agents",
+            error=msg,
+            meta=orch_base,
         )
+        await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=False, error=msg)
         return
 
     if not settings.vllm_base_url.strip():
+        msg = "VLLM_BASE_URL is not configured"
         await store.finish_agent_run(
             run_id,
             status=AgentRunStatus.failed,
-            error="VLLM_BASE_URL is not configured",
+            error=msg,
+            meta=orch_base,
         )
+        await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=False, error=msg)
         return
 
-    ev_type = _EVENT_TYPE[run.agent]
+    ev_type = _EVENT_TYPE.get(run.agent)
+    runner_fn = _AGENT_RUNNERS.get(run.agent)
+    if ev_type is None or runner_fn is None:
+        msg = f"Unsupported agent kind: {run.agent.value}"
+        await store.finish_agent_run(
+            run_id,
+            status=AgentRunStatus.failed,
+            error=msg,
+            meta=orch_base,
+        )
+        await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=False, error=msg)
+        return
 
     if not run.force:
         prev = await store.get_latest_event(
@@ -77,6 +132,7 @@ async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOu
         ):
             res = prev.payload["result"]
             meta = {
+                **orch_base,
                 "cached": True,
                 "attempts": 0,
                 "model": settings.vllm_model,
@@ -89,21 +145,10 @@ async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOu
                 event_id=prev.id,
                 meta=meta,
             )
+            await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=True)
             return
 
-    if run.agent == AgentKind.synthesis:
-        result_model, meta = await run_synthesis_agent(settings, job.summary)
-    elif run.agent == AgentKind.risk_review:
-        result_model, meta = await run_risk_review_agent(settings, job.summary)
-    elif run.agent == AgentKind.incident_brief:
-        result_model, meta = await run_incident_brief_agent(settings, job.summary)
-    else:
-        await store.finish_agent_run(
-            run_id,
-            status=AgentRunStatus.failed,
-            error=f"Unsupported agent kind: {run.agent.value}",
-        )
-        return
+    result_model, meta = await runner_fn(settings, job.summary)
 
     payload: dict[str, Any] = {
         "agent_id": _AGENT_PAYLOAD_ID[run.agent],
@@ -123,22 +168,33 @@ async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOu
     )
 
     if result_model is None:
+        err = str(meta.get("error") or "Agent failed")
+        fin_meta = {
+            **orch_base,
+            **_clean_meta({k: v for k, v in meta.items() if k != "error"}),
+        }
         await store.finish_agent_run(
             run_id,
             status=AgentRunStatus.failed,
-            error=str(meta.get("error") or "Agent failed"),
+            error=err,
             event_id=event_id,
-            meta=_clean_meta({k: v for k, v in meta.items() if k != "error"}),
+            meta=fin_meta,
         )
+        await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=False, error=err)
         return
 
+    fin_meta = {
+        **orch_base,
+        **_clean_meta({k: v for k, v in meta.items() if k != "error"}),
+    }
     await store.finish_agent_run(
         run_id,
         status=AgentRunStatus.completed,
         result=result_model.model_dump(),
         event_id=event_id,
-        meta=_clean_meta({k: v for k, v in meta.items() if k != "error"}),
+        meta=fin_meta,
     )
+    await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=True)
 
 
 async def agent_worker_loop(store: JobStore, settings: Settings, stop: asyncio.Event) -> None:
@@ -164,10 +220,15 @@ async def agent_worker_loop(store: JobStore, settings: Settings, stop: asyncio.E
             except Exception:
                 logger.exception("Agent run %s failed with unexpected error", run.id)
                 try:
+                    msg = "Internal error while running agent"
                     await store.finish_agent_run(
                         run.id,
                         status=AgentRunStatus.failed,
-                        error="Internal error while running agent",
+                        error=msg,
+                        meta=orchestration_fields(run.meta),
+                    )
+                    await notify_agent_orchestration_terminal(
+                        store, run.job_id, run.meta, success=False, error=msg
                     )
                 except Exception:
                     logger.exception("Could not mark agent run %s failed", run.id)

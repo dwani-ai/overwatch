@@ -18,9 +18,15 @@ All processed video runs are logged with **timestamp + frame index + event paylo
   - **Synthesis** — cross-chunk narrative and recommended actions (`agent_synthesis` event).
   - **Risk review** — safety / security triage (`agent_risk_review` event).
   - **Incident brief** — short handoff narrative and follow-ups (`agent_incident_brief` event).
-  - **Async queue:** **`POST /v1/jobs/{id}/agent-runs`** with body `{"agent":"synthesis"|"risk_review"|"incident_brief","force":?}` returns **202** and a **`run_id`**; poll **`GET /v1/agent-runs/{run_id}`** until `status` is `completed` or `failed`. A background **agent worker** (started with the API) drains the queue and still appends **orchestrator** events for audit. Stale `processing` rows (e.g. after a crash) are marked **failed** periodically.
+  - **Compliance brief** — cross-industry SOP / safety alignment from the summary (`agent_compliance_brief`).
+  - **Loss prevention** — retail / logistics behavioural narrative without identities (`agent_loss_prevention`).
+  - **Perimeter chain** — ordered boundary / access storyline (`agent_perimeter_chain`).
+  - **Privacy review** — identity-inference and sensitive-descriptor risks in the structured summary (`agent_privacy_review`).
+  - **Async queue:** **`POST /v1/jobs/{id}/agent-runs`** with body `{"agent": "<kind>","force":?}` where `<kind>` is one of **`synthesis`**, **`risk_review`**, **`incident_brief`**, **`compliance_brief`**, **`loss_prevention`**, **`perimeter_chain`**, **`privacy_review`**. Returns **202** and **`run_id`**; poll **`GET /v1/agent-runs/{run_id}`** until `status` is `completed` or `failed`. A background **agent worker** drains the queue and appends **orchestrator** events. Stale `processing` rows are marked **failed** periodically.
+  - **Orchestrated flow (linear):** **`POST /v1/jobs/{id}/agent-runs/orchestrate`** with body `{"steps":[...], "force":?}` (up to 24 kinds; e.g. core three or the full seven cross-industry agents) returns **202** with **`orchestration_id`** and **`head_run_id`**. Poll **`GET /v1/agent-orchestrations/{orchestration_id}`** until `status` is `completed` or `failed`; each step enqueues the next automatically on success. Only one **running** orchestration per job (**409** if a second is started). List past runs: **`GET /v1/jobs/{id}/agent-orchestrations`**. Response includes **`industry_pack`** when the run was started via the industry endpoint (else `null`).
+  - **Industry pipelines (named static graphs):** **`POST /v1/jobs/{id}/agent-runs/orchestrate/industry`** with body `{"industry":"<pack>","force":?}` selects a **curated agent order** for the vertical. Packs: **`general`** (all seven agents), **`retail_qsr`**, **`logistics_warehouse`**, **`manufacturing`**, **`commercial_real_estate`**, **`transportation_hubs`**, **`critical_infrastructure`**, **`banking_atm`**, **`hospitality_venues`**, **`education_campus`**, **`healthcare_facilities`**. Orderings are defined in [`industry_pipelines.py`](src/overwatch/industry_pipelines.py) (versionable, testable). This is the recommended approach **before** LLM-driven dynamic graphs: explicit policy per industry. The UI exposes an **industry** dropdown and **Run industry pipeline**.
   - **Blocking synthesis** (optional): **`POST /v1/jobs/{id}/agents/synthesis?blocking=true`** waits for the LLM in-process (legacy / scripts).
-  - **Latest by kind:** **`GET …/agents/synthesis`**, **`GET …/agents/risk-review`**, and **`GET …/agents/incident-brief`** return the newest stored event payload. The web UI runs agents via the async API and polls.  
+  - **Latest by kind:** **`GET …/agents/synthesis`**, **`…/risk-review`**, **`…/incident-brief`**, **`…/compliance-brief`**, **`…/loss-prevention`**, **`…/perimeter-chain`**, **`…/privacy-review`** return the newest stored event payload.  
 - **Web UI** (Vite + React): upload a video and poll for job status + summary (`frontend/`; Docker **`overwatch-ui`** publishes the gateway on host port **80**)  
 - **SQLite** job + event store under `DATA_DIR`; jobs include **`summary_json`** (aggregated structured analysis)  
 - **Folder ingest**: poll `INGEST_DIR` for new video files; stable-write detection (`INGEST_STABLE_SEC`)  
@@ -109,6 +115,13 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 - Google Agent Development Kit (planned)  
 - A2A — Agent-to-Agent protocol (planned)  
 
+## Documentation
+
+- **Engineering technical report** (~10 pages): [docs/technical_report.md](docs/technical_report.md) — architecture, data model, chunk and agent pipelines, orchestration and industry packs, API overview, configuration, deployment, testing, and known limitations.
+- **Research evaluation plan**: [docs/eval_report.md](docs/eval_report.md) — layered methodology, run cards, rubrics backlog.  
+- **Factorio closed-loop (research)**: [docs/factorio_report.md](docs/factorio_report.md) — prototype scope, phases, parser fixtures.  
+- **Research doc index**: [docs/todo_report.md](docs/todo_report.md) — links to the reports above.
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -128,8 +141,13 @@ Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/
 | `VLLM_CHUNK_MAX_TOKENS` | `1024` | Max completion tokens for **observe** (multimodal JSON) |
 | `VLLM_JSON_RETRY_MAX` | `2` | JSON parse repair rounds per LLM step |
 | `VLLM_SPECIALIST_MAX_TOKENS` | `800` | Max tokens per **text specialist** call |
-| `VLLM_AGENT_MAX_TOKENS` | `2048` | Max tokens for job-level text agents (synthesis, risk review, incident brief) |
+| `VLLM_AGENT_MAX_TOKENS` | `2048` | Max tokens for job-level text agents (all seven kinds + any future agents) |
 | `VLLM_AGENT_TIMEOUT_SEC` | `120` | HTTP timeout for job-level text agent chat completions |
+| `VLLM_FACTORIO_MAX_TOKENS` | `1024` | Max tokens for Factorio HUD screenshot parser (`overwatch.factorio`) |
+| `VLLM_FACTORIO_TIMEOUT_SEC` | `120` | HTTP timeout for Factorio multimodal parser calls |
+| `FACTORIO_ROOT` | _(unset)_ | Session + frame store root; default is `DATA_DIR/factorio` |
+| `FACTORIO_MAX_ACTIONS_PER_MINUTE` | `30` | Cap for `overwatch.factorio.SkillExecutor` when not in dry-run |
+| `FACTORIO_CAPTURE_INTERVAL_SEC` | `2` | Default interval for `overwatch.factorio.capture_loop` |
 | `MAX_UPLOAD_BYTES` | `536870912` | Multipart upload cap (default 512 MiB; align with reverse proxy `client_max_body_size`) |
 | `AGENT_RUN_STALE_SEC` | `900` | Agent runs stuck in `processing` longer than this are marked failed (worker restart / hang) |
 | `API_RATE_LIMIT_PER_MINUTE` | `0` | Per-IP (or `X-Forwarded-For`) cap over 60s; `0` disables |
@@ -149,9 +167,11 @@ Set `VLLM_BASE_URL=` empty to skip all vLLM calls (probe + chat).
 - `GET /v1/jobs/{id}/summary` → aggregated `chunk_analyses` after the job completes  
 - `GET /v1/jobs/{id}` includes `summary` when present  
 - `POST /v1/jobs/{id}/agent-runs` → queue agent run (**202** + `run_id`); `GET /v1/agent-runs/{run_id}` → status and `result`  
+- `POST /v1/jobs/{id}/agent-runs/orchestrate` → sequential multi-agent run (**202** + `orchestration_id`, `head_run_id`); `POST /v1/jobs/{id}/agent-runs/orchestrate/industry` → same, with **`industry`** pack and persisted **`industry_pack`** on the orchestration row  
+- `GET /v1/agent-orchestrations/{orchestration_id}` → pipeline status (includes **`industry_pack`** when applicable); `GET /v1/jobs/{id}/agent-orchestrations` → history  
 - `GET /v1/jobs/{id}/agent-runs` → recent runs for that job  
 - `POST /v1/jobs/{id}/agents/synthesis?blocking=true` → blocking synthesis; without `blocking`, **202** + async queue (same as `agent-runs` with `synthesis`)  
-- `GET /v1/jobs/{id}/agents/synthesis` / **`…/agents/risk-review`** / **`…/agents/incident-brief`** → latest stored event payload  
+- `GET /v1/jobs/{id}/agents/synthesis` / **`…/risk-review`** / **`…/incident-brief`** / **`…/compliance-brief`** / **`…/loss-prevention`** / **`…/perimeter-chain`** / **`…/privacy-review`** → latest stored event payload  
 
 **Observe multimodal format:** [`chunk_video_user_messages`](src/overwatch/vllm_client.py) — `text` + `video_url` (`data:video/mp4;base64,...`). Structured parsing lives in [`analysis/chunk_pipeline.py`](src/overwatch/analysis/chunk_pipeline.py) and [`analysis/json_extract.py`](src/overwatch/analysis/json_extract.py).
 

@@ -26,6 +26,9 @@ export function formatHttpError(status: number, body: string): string {
   if (status === 429) {
     return b || "Too many requests. Wait briefly and try again.";
   }
+  if (status === 409) {
+    return b || "Conflict — e.g. an orchestration is already running for this job.";
+  }
   return b || `Request failed (HTTP ${status}).`;
 }
 
@@ -83,7 +86,14 @@ export async function getSummary(id: string): Promise<Record<string, unknown>> {
   return r.json();
 }
 
-export type AgentKind = "synthesis" | "risk_review" | "incident_brief";
+export type AgentKind =
+  | "synthesis"
+  | "risk_review"
+  | "incident_brief"
+  | "compliance_brief"
+  | "loss_prevention"
+  | "perimeter_chain"
+  | "privacy_review";
 
 export type AgentRunPublic = {
   id: string;
@@ -140,6 +150,130 @@ export async function listJobAgentRuns(
   return r.json();
 }
 
+/** Default linear pipeline: context → risk → handoff brief. */
+export const DEFAULT_AGENT_PIPELINE: AgentKind[] = ["synthesis", "risk_review", "incident_brief"];
+
+/** All cross-industry job agents in a single ordered run (longer / costlier). */
+export const CROSS_INDUSTRY_AGENT_PIPELINE: AgentKind[] = [
+  "synthesis",
+  "risk_review",
+  "incident_brief",
+  "compliance_brief",
+  "loss_prevention",
+  "perimeter_chain",
+  "privacy_review",
+];
+
+/** Vertical pack for curated multi-agent order (matches API ``IndustryPack``). */
+export type IndustryPack =
+  | "general"
+  | "retail_qsr"
+  | "logistics_warehouse"
+  | "manufacturing"
+  | "commercial_real_estate"
+  | "transportation_hubs"
+  | "critical_infrastructure"
+  | "banking_atm"
+  | "hospitality_venues"
+  | "education_campus"
+  | "healthcare_facilities";
+
+export const INDUSTRY_PACK_OPTIONS: { value: IndustryPack; label: string }[] = [
+  { value: "general", label: "General — all seven agents (baseline graph)" },
+  { value: "retail_qsr", label: "Retail & QSR" },
+  { value: "logistics_warehouse", label: "Logistics & warehouse" },
+  { value: "manufacturing", label: "Manufacturing" },
+  { value: "commercial_real_estate", label: "Commercial real estate / campus" },
+  { value: "transportation_hubs", label: "Transportation hubs" },
+  { value: "critical_infrastructure", label: "Critical infrastructure / utilities" },
+  { value: "banking_atm", label: "Banking & ATM / branch" },
+  { value: "hospitality_venues", label: "Hospitality & venues" },
+  { value: "education_campus", label: "Education campus" },
+  { value: "healthcare_facilities", label: "Healthcare facilities" },
+];
+
+export type AgentOrchestrationPublic = {
+  id: string;
+  job_id: string;
+  status: string;
+  steps: AgentKind[];
+  current_step: number;
+  total_steps: number;
+  force: boolean;
+  industry_pack?: IndustryPack | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentOrchestrateAccepted = {
+  orchestration_id: string;
+  job_id: string;
+  steps: AgentKind[];
+  status: string;
+  current_step: number;
+  total_steps: number;
+  force: boolean;
+  industry_pack?: IndustryPack | null;
+  head_run_id: string;
+  poll_url: string;
+  head_run_poll_url: string;
+  detail?: string;
+};
+
+export async function startAgentOrchestration(
+  jobId: string,
+  steps: AgentKind[] = DEFAULT_AGENT_PIPELINE,
+  force = false,
+): Promise<AgentOrchestrateAccepted> {
+  const r = await apiFetch(`/jobs/${jobId}/agent-runs/orchestrate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ steps, force }),
+  });
+  if (r.status !== 202) {
+    throw new Error(formatHttpError(r.status, await r.text()));
+  }
+  return r.json();
+}
+
+export async function startIndustryOrchestration(
+  jobId: string,
+  industry: IndustryPack,
+  force = false,
+): Promise<AgentOrchestrateAccepted> {
+  const r = await apiFetch(`/jobs/${jobId}/agent-runs/orchestrate/industry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ industry, force }),
+  });
+  if (r.status !== 202) {
+    throw new Error(formatHttpError(r.status, await r.text()));
+  }
+  return r.json();
+}
+
+export async function getAgentOrchestration(orchId: string): Promise<AgentOrchestrationPublic> {
+  const r = await apiFetch(`/agent-orchestrations/${orchId}`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function pollAgentOrchestration(
+  orchId: string,
+  opts?: { intervalMs?: number; maxWaitMs?: number },
+): Promise<AgentOrchestrationPublic> {
+  const intervalMs = opts?.intervalMs ?? 800;
+  const maxWaitMs = opts?.maxWaitMs ?? 900_000;
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxWaitMs) {
+    const o = await getAgentOrchestration(orchId);
+    if (o.status === "completed" || o.status === "failed") return o;
+    await new Promise((res) => setTimeout(res, intervalMs));
+  }
+  throw new Error("Timed out waiting for orchestration");
+}
+
 export async function pollAgentRun(
   runId: string,
   opts?: { intervalMs?: number; maxWaitMs?: number },
@@ -182,6 +316,40 @@ export type IncidentBriefResult = {
   suggested_followups: string[];
 };
 
+export type ComplianceBriefResult = {
+  schema_version: string;
+  overall_alignment: string;
+  observed_practices: string[];
+  gaps_or_concerns: string[];
+  recommended_verifications: string[];
+  notes: string;
+};
+
+export type LossPreventionResult = {
+  schema_version: string;
+  narrative: string;
+  behavioral_observations: string[];
+  risk_level: string;
+  suggested_actions: string[];
+};
+
+export type PerimeterChainResult = {
+  schema_version: string;
+  chain_narrative: string;
+  key_events: string[];
+  zones_or_segments: string[];
+  follow_up_checks: string[];
+};
+
+export type PrivacyReviewResult = {
+  schema_version: string;
+  overall_privacy_risk: string;
+  identity_inference_risks: string[];
+  sensitive_descriptors: string[];
+  safe_output_guidance: string[];
+  summary: string;
+};
+
 export type AgentEventPayload = {
   event_id: number;
   observed_at: string;
@@ -206,6 +374,30 @@ export async function getRiskReview(jobId: string): Promise<AgentEventPayload> {
 
 export async function getIncidentBrief(jobId: string): Promise<AgentEventPayload> {
   const r = await apiFetch(`/jobs/${jobId}/agents/incident-brief`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getComplianceBrief(jobId: string): Promise<AgentEventPayload> {
+  const r = await apiFetch(`/jobs/${jobId}/agents/compliance-brief`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getLossPrevention(jobId: string): Promise<AgentEventPayload> {
+  const r = await apiFetch(`/jobs/${jobId}/agents/loss-prevention`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getPerimeterChain(jobId: string): Promise<AgentEventPayload> {
+  const r = await apiFetch(`/jobs/${jobId}/agents/perimeter-chain`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getPrivacyReview(jobId: string): Promise<AgentEventPayload> {
+  const r = await apiFetch(`/jobs/${jobId}/agents/privacy-review`);
   if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
   return r.json();
 }

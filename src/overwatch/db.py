@@ -53,6 +53,23 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 
 CREATE INDEX IF NOT EXISTS idx_agent_runs_job ON agent_runs(job_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+
+CREATE TABLE IF NOT EXISTS agent_orchestrations (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    steps_json TEXT NOT NULL,
+    current_step INTEGER NOT NULL DEFAULT 0,
+    force_run INTEGER NOT NULL DEFAULT 0,
+    industry_pack TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (job_id) REFERENCES jobs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_orch_job ON agent_orchestrations(job_id);
+CREATE INDEX IF NOT EXISTS idx_agent_orch_status ON agent_orchestrations(status);
 """
 
 
@@ -61,6 +78,35 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
     cols = {str(r[1]) for r in await cur.fetchall()}
     if "summary_json" not in cols:
         await conn.execute("ALTER TABLE jobs ADD COLUMN summary_json TEXT")
+        await conn.commit()
+    cur = await conn.execute("PRAGMA table_info(agent_orchestrations)")
+    orch_cols = {str(r[1]) for r in await cur.fetchall()}
+    if orch_cols and "industry_pack" not in orch_cols:
+        await conn.execute("ALTER TABLE agent_orchestrations ADD COLUMN industry_pack TEXT")
+        await conn.commit()
+    cur = await conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='agent_orchestrations'"
+    )
+    if await cur.fetchone() is None:
+        await conn.executescript(
+            """
+            CREATE TABLE agent_orchestrations (
+                id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                steps_json TEXT NOT NULL,
+                current_step INTEGER NOT NULL DEFAULT 0,
+                force_run INTEGER NOT NULL DEFAULT 0,
+                industry_pack TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (job_id) REFERENCES jobs(id)
+            );
+            CREATE INDEX idx_agent_orch_job ON agent_orchestrations(job_id);
+            CREATE INDEX idx_agent_orch_status ON agent_orchestrations(status);
+            """
+        )
         await conn.commit()
 
 

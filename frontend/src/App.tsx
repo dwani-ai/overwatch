@@ -2,18 +2,29 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type {
   AgentKind,
   AgentRunPublic,
+  ComplianceBriefResult,
   IncidentBriefResult,
+  IndustryPack,
   JobRecord,
+  LossPreventionResult,
+  PerimeterChainResult,
+  PrivacyReviewResult,
   RiskReviewResult,
   SynthesisResult,
 } from "./api";
 import {
   createAgentRun,
+  CROSS_INDUSTRY_AGENT_PIPELINE,
+  DEFAULT_AGENT_PIPELINE,
   getJob,
   getSummary,
+  INDUSTRY_PACK_OPTIONS,
   listJobAgentRuns,
   listJobs,
+  pollAgentOrchestration,
   pollAgentRun,
+  startAgentOrchestration,
+  startIndustryOrchestration,
   uploadVideo,
 } from "./api";
 import "./App.css";
@@ -270,6 +281,11 @@ function SummaryView({ jobId, data }: { jobId: string | null; data: Record<strin
 
 function AgentsPanel({ jobId }: { jobId: string }) {
   const [allRuns, setAllRuns] = useState<AgentRunPublic[]>([]);
+  const [orchPhase, setOrchPhase] = useState("");
+  const [orchErr, setOrchErr] = useState<string | null>(null);
+  const [orchBusy, setOrchBusy] = useState(false);
+  const [industryPick, setIndustryPick] = useState<IndustryPack>("general");
+
   const refreshRuns = useCallback(async () => {
     try {
       const { items } = await listJobAgentRuns(jobId, 100);
@@ -293,8 +309,145 @@ function AgentsPanel({ jobId }: { jobId: string }) {
     return () => clearInterval(t);
   }, [allRuns, refreshRuns]);
 
+  const runOrchestratedPipeline = async (force: boolean, steps: AgentKind[]) => {
+    setOrchErr(null);
+    setOrchPhase("");
+    setOrchBusy(true);
+    try {
+      const q = await startAgentOrchestration(jobId, steps, force);
+      setOrchPhase(
+        `Running ${q.steps.join(" → ")}… (${q.orchestration_id.slice(0, 8)}…)`,
+      );
+      const long = steps.length > 4;
+      const done = await pollAgentOrchestration(q.orchestration_id, {
+        intervalMs: long ? 2000 : 1200,
+        maxWaitMs: long ? 1_800_000 : 900_000,
+      });
+      await refreshRuns();
+      if (done.status === "failed") {
+        setOrchErr(done.error || "Orchestration failed");
+        setOrchPhase("");
+        return;
+      }
+      setOrchPhase("Orchestrated pipeline completed.");
+    } catch (e) {
+      setOrchErr(e instanceof Error ? e.message : String(e));
+      setOrchPhase("");
+    } finally {
+      setOrchBusy(false);
+    }
+  };
+
+  const runNamedIndustryPipeline = async (force: boolean) => {
+    setOrchErr(null);
+    setOrchPhase("");
+    setOrchBusy(true);
+    try {
+      const q = await startIndustryOrchestration(jobId, industryPick, force);
+      const label = INDUSTRY_PACK_OPTIONS.find((o) => o.value === industryPick)?.label ?? industryPick;
+      setOrchPhase(
+        `${label}: ${q.steps.join(" → ")}… (${q.orchestration_id.slice(0, 8)}…)`,
+      );
+      const long = q.steps.length > 4;
+      const done = await pollAgentOrchestration(q.orchestration_id, {
+        intervalMs: long ? 2000 : 1200,
+        maxWaitMs: long ? 1_800_000 : 900_000,
+      });
+      await refreshRuns();
+      if (done.status === "failed") {
+        setOrchErr(done.error || "Orchestration failed");
+        setOrchPhase("");
+        return;
+      }
+      setOrchPhase("Industry pipeline completed.");
+    } catch (e) {
+      setOrchErr(e instanceof Error ? e.message : String(e));
+      setOrchPhase("");
+    } finally {
+      setOrchBusy(false);
+    }
+  };
+
   return (
     <div className="agents-panel">
+      <div className="synthesis agent-block orchestration-block">
+        <h3 className="synthesis-title">Orchestrated pipelines</h3>
+        <p className="muted small">
+          <strong>Core (3)</strong>: synthesis → risk review → incident brief.{" "}
+          <strong>Cross-industry (7)</strong>: all agents in one fixed order.{" "}
+          <strong>Industry pipeline</strong>: same agents, <em>reordered per vertical</em> (named static graph —
+          auditable in code).
+        </p>
+        <div className="orchestration-industry">
+          <label className="label small">Industry vertical</label>
+          <select
+            className="industry-select"
+            value={industryPick}
+            disabled={orchBusy}
+            onChange={(e) => setIndustryPick(e.target.value as IndustryPack)}
+          >
+            {INDUSTRY_PACK_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <div className="synthesis-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={orchBusy}
+              onClick={() => runNamedIndustryPipeline(false)}
+            >
+              Run industry pipeline
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={orchBusy}
+              onClick={() => runNamedIndustryPipeline(true)}
+            >
+              Force industry pipeline
+            </button>
+          </div>
+        </div>
+        <div className="synthesis-actions">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={orchBusy}
+            onClick={() => runOrchestratedPipeline(false, DEFAULT_AGENT_PIPELINE)}
+          >
+            {orchBusy ? "Running…" : "Run core pipeline (3)"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={orchBusy}
+            onClick={() => runOrchestratedPipeline(true, DEFAULT_AGENT_PIPELINE)}
+          >
+            Force core (no cache)
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={orchBusy}
+            onClick={() => runOrchestratedPipeline(false, CROSS_INDUSTRY_AGENT_PIPELINE)}
+          >
+            Run cross-industry suite (7)
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={orchBusy}
+            onClick={() => runOrchestratedPipeline(true, CROSS_INDUSTRY_AGENT_PIPELINE)}
+          >
+            Force suite (no cache)
+          </button>
+        </div>
+        {orchPhase ? <p className="phase small">{orchPhase}</p> : null}
+        {orchErr ? <p className="error small">{orchErr}</p> : null}
+      </div>
       <AgentAsyncBlock
         jobId={jobId}
         agent="synthesis"
@@ -303,7 +456,7 @@ function AgentsPanel({ jobId }: { jobId: string }) {
         runs={allRuns.filter((r) => r.agent === "synthesis")}
         onRefreshRuns={refreshRuns}
         render={(r) => <SynthesisBody result={r as SynthesisResult} />}
-        previewSynthesis={previewSynthesisRun}
+        preview={previewSynthesisRun}
       />
       <AgentAsyncBlock
         jobId={jobId}
@@ -313,7 +466,7 @@ function AgentsPanel({ jobId }: { jobId: string }) {
         runs={allRuns.filter((r) => r.agent === "risk_review")}
         onRefreshRuns={refreshRuns}
         render={(r) => <RiskReviewBody result={r as RiskReviewResult} />}
-        previewRisk={previewRiskRun}
+        preview={previewRiskRun}
       />
       <AgentAsyncBlock
         jobId={jobId}
@@ -323,7 +476,47 @@ function AgentsPanel({ jobId }: { jobId: string }) {
         runs={allRuns.filter((r) => r.agent === "incident_brief")}
         onRefreshRuns={refreshRuns}
         render={(r) => <IncidentBriefBody result={r as IncidentBriefResult} />}
-        previewIncidentBrief={previewIncidentBriefRun}
+        preview={previewIncidentBriefRun}
+      />
+      <AgentAsyncBlock
+        jobId={jobId}
+        agent="compliance_brief"
+        title="Compliance brief"
+        blurb="Cross-industry SOP / safety alignment read from the summary (warehouse, retail, plant, office)."
+        runs={allRuns.filter((r) => r.agent === "compliance_brief")}
+        onRefreshRuns={refreshRuns}
+        render={(r) => <ComplianceBriefBody result={r as ComplianceBriefResult} />}
+        preview={previewComplianceBriefRun}
+      />
+      <AgentAsyncBlock
+        jobId={jobId}
+        agent="loss_prevention"
+        title="Loss prevention"
+        blurb="Retail / logistics LP-style behavioural narrative without identities."
+        runs={allRuns.filter((r) => r.agent === "loss_prevention")}
+        onRefreshRuns={refreshRuns}
+        render={(r) => <LossPreventionBody result={r as LossPreventionResult} />}
+        preview={previewLossPreventionRun}
+      />
+      <AgentAsyncBlock
+        jobId={jobId}
+        agent="perimeter_chain"
+        title="Perimeter chain"
+        blurb="Ordered boundary / access storyline for sites, yards, campuses, and similar."
+        runs={allRuns.filter((r) => r.agent === "perimeter_chain")}
+        onRefreshRuns={refreshRuns}
+        render={(r) => <PerimeterChainBody result={r as PerimeterChainResult} />}
+        preview={previewPerimeterChainRun}
+      />
+      <AgentAsyncBlock
+        jobId={jobId}
+        agent="privacy_review"
+        title="Privacy review"
+        blurb="Flags identity-inference and sensitive-descriptor risks in the structured summary text."
+        runs={allRuns.filter((r) => r.agent === "privacy_review")}
+        onRefreshRuns={refreshRuns}
+        render={(r) => <PrivacyReviewBody result={r as PrivacyReviewResult} />}
+        preview={previewPrivacyReviewRun}
       />
     </div>
   );
@@ -357,6 +550,50 @@ function previewIncidentBriefRun(result: Record<string, unknown> | null): string
   return t.length > 160 ? `${t.slice(0, 160)}…` : t;
 }
 
+function previewComplianceBriefRun(result: Record<string, unknown> | null): string {
+  if (!result) return "";
+  const a = result.overall_alignment;
+  const n = result.notes;
+  const align = typeof a === "string" ? a : "?";
+  if (typeof n === "string" && n.trim()) {
+    const t = n.trim();
+    return `${align}: ${t.length > 100 ? `${t.slice(0, 100)}…` : t}`;
+  }
+  return align;
+}
+
+function previewLossPreventionRun(result: Record<string, unknown> | null): string {
+  if (!result) return "";
+  const risk = result.risk_level;
+  const r = typeof risk === "string" ? risk : "?";
+  const obs = result.behavioral_observations;
+  if (Array.isArray(obs) && obs.length && typeof obs[0] === "string") {
+    const o0 = obs[0];
+    return `${r}: ${o0.length > 90 ? `${o0.slice(0, 90)}…` : o0}`;
+  }
+  return r;
+}
+
+function previewPerimeterChainRun(result: Record<string, unknown> | null): string {
+  if (!result) return "";
+  const c = result.chain_narrative;
+  if (typeof c !== "string" || !c.trim()) return "";
+  const t = c.trim();
+  return t.length > 160 ? `${t.slice(0, 160)}…` : t;
+}
+
+function previewPrivacyReviewRun(result: Record<string, unknown> | null): string {
+  if (!result) return "";
+  const pr = result.overall_privacy_risk;
+  const s = result.summary;
+  const risk = typeof pr === "string" ? pr : "?";
+  if (typeof s === "string" && s.trim()) {
+    const t = s.trim();
+    return `${risk}: ${t.length > 100 ? `${t.slice(0, 100)}…` : t}`;
+  }
+  return risk;
+}
+
 function AgentAsyncBlock({
   jobId,
   agent,
@@ -365,9 +602,7 @@ function AgentAsyncBlock({
   runs,
   onRefreshRuns,
   render,
-  previewSynthesis,
-  previewRisk,
-  previewIncidentBrief,
+  preview: previewFn,
 }: {
   jobId: string;
   agent: AgentKind;
@@ -376,21 +611,14 @@ function AgentAsyncBlock({
   runs: AgentRunPublic[];
   onRefreshRuns: () => Promise<void>;
   render: (result: Record<string, unknown>) => ReactNode;
-  previewSynthesis?: (result: Record<string, unknown> | null) => string;
-  previewRisk?: (result: Record<string, unknown> | null) => string;
-  previewIncidentBrief?: (result: Record<string, unknown> | null) => string;
+  preview?: (result: Record<string, unknown> | null) => string;
 }) {
   const [openIds, setOpenIds] = useState<Record<string, boolean>>({});
   const [phase, setPhase] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const preview =
-    agent === "synthesis"
-      ? previewSynthesis ?? (() => "")
-      : agent === "risk_review"
-        ? previewRisk ?? (() => "")
-        : previewIncidentBrief ?? (() => "");
+  const preview = previewFn ?? (() => "");
 
   const toggleOpen = (id: string) => {
     setOpenIds((o) => ({ ...o, [id]: !o[id] }));
@@ -514,6 +742,70 @@ function IncidentBriefBody({ result }: { result: IncidentBriefResult }) {
       <StringList title="Key moments" items={result.key_moments} />
       <StringList title="Situational factors" items={result.situational_factors} />
       <StringList title="Suggested follow-ups" items={result.suggested_followups} />
+    </>
+  );
+}
+
+function ComplianceBriefBody({ result }: { result: ComplianceBriefResult }) {
+  return (
+    <>
+      <p className="muted small">
+        Overall alignment: <strong>{result.overall_alignment}</strong>
+      </p>
+      {result.notes ? <p className="scene">{result.notes}</p> : null}
+      <StringList title="Observed practices" items={result.observed_practices} />
+      <StringList title="Gaps or concerns" items={result.gaps_or_concerns} />
+      <StringList title="Recommended verifications" items={result.recommended_verifications} />
+    </>
+  );
+}
+
+function LossPreventionBody({ result }: { result: LossPreventionResult }) {
+  const sev =
+    result.risk_level === "high"
+      ? "risk-high"
+      : result.risk_level === "medium"
+        ? "risk-medium"
+        : "risk-low";
+  return (
+    <>
+      <p className={`risk-badge ${sev}`}>
+        LP risk: <strong>{result.risk_level}</strong>
+      </p>
+      <p className="scene">{result.narrative}</p>
+      <StringList title="Behavioral observations" items={result.behavioral_observations} />
+      <StringList title="Suggested actions" items={result.suggested_actions} />
+    </>
+  );
+}
+
+function PerimeterChainBody({ result }: { result: PerimeterChainResult }) {
+  return (
+    <>
+      <p className="scene">{result.chain_narrative}</p>
+      <StringList title="Key events" items={result.key_events} />
+      <StringList title="Zones / segments" items={result.zones_or_segments} />
+      <StringList title="Follow-up checks" items={result.follow_up_checks} />
+    </>
+  );
+}
+
+function PrivacyReviewBody({ result }: { result: PrivacyReviewResult }) {
+  const sev =
+    result.overall_privacy_risk === "high"
+      ? "risk-high"
+      : result.overall_privacy_risk === "medium"
+        ? "risk-medium"
+        : "risk-low";
+  return (
+    <>
+      <p className={`risk-badge ${sev}`}>
+        Privacy risk: <strong>{result.overall_privacy_risk}</strong>
+      </p>
+      <p className="scene">{result.summary}</p>
+      <StringList title="Identity inference risks" items={result.identity_inference_risks} />
+      <StringList title="Sensitive descriptors (in input)" items={result.sensitive_descriptors} />
+      <StringList title="Safe output guidance" items={result.safe_output_guidance} />
     </>
   );
 }
