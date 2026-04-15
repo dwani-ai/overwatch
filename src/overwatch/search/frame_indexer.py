@@ -129,9 +129,9 @@ class FrameIndexer:
         self._model = self._model.to(self._device)
 
         with torch.no_grad():
-            dummy = self._processor(text=["warmup"], return_tensors="pt").to(self._device)
+            dummy = self._processor(text=["warmup"], return_tensors="pt", padding=True).to(self._device)
             out = self._model.get_text_features(**dummy)
-            self._embedding_dim = int(out.shape[-1])
+            self._embedding_dim = int(self._extract_tensor(out).shape[-1])
 
         self._chroma_dir.mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(path=str(self._chroma_dir))
@@ -187,12 +187,29 @@ class FrameIndexer:
     # Low-level embedding helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _extract_tensor(out: Any) -> Any:
+        """Return a plain tensor regardless of whether the model returned a
+        tensor directly or wrapped it in a ModelOutput dataclass.
+
+        SiglipModel.get_text/image_features() returns a tensor in most
+        transformers versions, but some builds return BaseModelOutputWithPooling.
+        We handle both cases gracefully.
+        """
+        if hasattr(out, "shape"):
+            return out  # already a tensor
+        if hasattr(out, "pooler_output") and out.pooler_output is not None:
+            return out.pooler_output
+        if hasattr(out, "last_hidden_state"):
+            return out.last_hidden_state[:, 0]
+        raise ValueError(f"Cannot extract feature tensor from model output of type {type(out)}")
+
     def _embed_texts(self, texts: list[str]) -> list[list[float]]:
         inputs = self._processor(
             text=texts, return_tensors="pt", padding=True, truncation=True, max_length=64
         ).to(self._device)
         with self._torch.no_grad():
-            feats = self._model.get_text_features(**inputs)
+            feats = self._extract_tensor(self._model.get_text_features(**inputs))
             feats = feats / feats.norm(dim=-1, keepdim=True)
         return feats.cpu().float().numpy().tolist()
 
@@ -203,7 +220,7 @@ class FrameIndexer:
         images = [Image.open(io.BytesIO(b)).convert("RGB") for b in jpeg_list]
         inputs = self._processor(images=images, return_tensors="pt").to(self._device)
         with self._torch.no_grad():
-            feats = self._model.get_image_features(**inputs)
+            feats = self._extract_tensor(self._model.get_image_features(**inputs))
             feats = feats / feats.norm(dim=-1, keepdim=True)
         return feats.cpu().float().numpy().tolist()
 
