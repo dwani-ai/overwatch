@@ -242,6 +242,7 @@ export default function SearchPanel({
   const [filterJobId, setFilterJobId] = useState<string>("");
   const [filterAgentTypes, setFilterAgentTypes] = useState<Set<string>>(new Set());
   const [filterSeverity, setFilterSeverity] = useState<string>("");
+  const [includeFrames, setIncludeFrames] = useState(true);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -291,6 +292,7 @@ export default function SearchPanel({
         query: q,
         limit: 15,
         synthesize_answer: synthesize,
+        include_frames: includeFrames,
         job_ids: filterJobId ? [filterJobId] : null,
         agent_types: filterAgentTypes.size > 0 ? Array.from(filterAgentTypes) : null,
         severity: filterSeverity || null,
@@ -303,7 +305,7 @@ export default function SearchPanel({
     } finally {
       setLoading(false);
     }
-  }, [query, synthesize, filterJobId, filterAgentTypes, filterSeverity]);
+  }, [query, synthesize, includeFrames, filterJobId, filterAgentTypes, filterSeverity]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") onSearch();
@@ -315,6 +317,8 @@ export default function SearchPanel({
         ? basename(recentJobs.find((j) => j.id === filterJobId)!.source_path)
         : filterJobId.slice(0, 8))
     : null;
+
+  const frameSearchAvailable = !!(indexStatus?.frame_search_enabled && indexStatus.total_frames > 0);
 
   return (
     <section className="card search-panel" id="search-panel">
@@ -330,10 +334,15 @@ export default function SearchPanel({
           {indexStatus.enabled ? (
             <span className="muted small">
               {indexStatus.total_documents.toLocaleString()} text docs
-              {indexStatus.frame_search_enabled && (
-                <> · <span title="SigLIP-ViT frame embeddings">🎞 {indexStatus.total_frames.toLocaleString()} frames</span></>
+              {indexStatus.frame_search_enabled ? (
+                indexStatus.total_frames > 0 ? (
+                  <> · <span className="frame-index-ready" title="SigLIP-ViT cross-modal frame search ready">🎞 {indexStatus.total_frames.toLocaleString()} frames indexed</span></>
+                ) : (
+                  <> · <span className="muted" title="Frame indexer is loading or no jobs completed yet">🎞 frames indexing…</span></>
+                )
+              ) : (
+                <> · <span className="muted" title="Set FRAME_SEARCH_ENABLED=true and ensure transformers is installed">🎞 frame search off</span></>
               )}
-              {" · "}{indexStatus.embedding_model}
             </span>
           ) : (
             <span className="error small">Search index unavailable</span>
@@ -387,6 +396,28 @@ export default function SearchPanel({
             disabled={loading}
           />
           <span className="small">AI answer</span>
+        </label>
+
+        <label
+          className={`search-synthesize-label${!frameSearchAvailable ? " search-option-unavailable" : ""}`}
+          title={
+            frameSearchAvailable
+              ? "Include SigLIP cross-modal frame embedding results alongside text analysis results"
+              : "Frame search unavailable — frames are still indexing or FRAME_SEARCH_ENABLED=false"
+          }
+        >
+          <input
+            type="checkbox"
+            checked={includeFrames && frameSearchAvailable}
+            onChange={(e) => setIncludeFrames(e.target.checked)}
+            disabled={loading || !frameSearchAvailable}
+          />
+          <span className="small">🎞 Frame search</span>
+          {frameSearchAvailable && (
+            <span className="muted small" style={{ marginLeft: "0.25rem" }}>
+              ({(indexStatus?.total_frames ?? 0).toLocaleString()})
+            </span>
+          )}
         </label>
 
         <button
@@ -467,6 +498,12 @@ export default function SearchPanel({
       {totalFound !== null && results !== null && (
         <p className="muted small search-total">
           {totalFound} candidates · showing {results.length}
+          {results.some(r => r.source.content_type === "frame") && (
+            <span title="Includes SigLIP cross-modal frame results">
+              {" "}· 🎞 {results.filter(r => r.source.content_type === "frame").length} frame
+              {results.filter(r => r.source.content_type === "frame").length !== 1 ? "s" : ""}
+            </span>
+          )}
         </p>
       )}
 
@@ -491,6 +528,11 @@ export default function SearchPanel({
               onNavigateToJob={onNavigateToJob}
             />
           ))}
+          {results.some(r => r.source.content_type === "frame") && (
+            <p className="muted small search-frame-hint">
+              🎞 Frame results are video keyframes matched visually to your query using SigLIP-ViT embeddings. Click the filename to open the job and seek to that timestamp.
+            </p>
+          )}
         </div>
       )}
     </section>
