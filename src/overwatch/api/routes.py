@@ -49,9 +49,11 @@ StoreDep = Annotated[JobStore, Depends(get_store)]
 @router.get("/health")
 async def health(request: Request) -> dict[str, Any]:
     indexer = getattr(request.app.state, "search_indexer", None)
+    frame_indexer = getattr(request.app.state, "search_frame_indexer", None)
     return {
         "status": "ok",
         "search": "ready" if indexer is not None else "unavailable",
+        "frame_search": "ready" if frame_indexer is not None else "unavailable",
     }
 
 
@@ -79,7 +81,13 @@ async def delete_job(job_id: str, store: StoreDep, request: Request) -> None:
         try:
             await asyncio.to_thread(indexer.delete_job_docs, job_id)
         except Exception:
-            pass  # deletion already committed — log only
+            pass
+    frame_indexer = getattr(request.app.state, "search_frame_indexer", None)
+    if frame_indexer is not None:
+        try:
+            await asyncio.to_thread(frame_indexer.delete_job_frames, job_id)
+        except Exception:
+            pass
 
 
 @router.get("/jobs/{job_id}/search-status")
@@ -90,10 +98,26 @@ async def job_search_status(job_id: str, store: StoreDep, request: Request) -> d
     except KeyError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
     indexer = getattr(request.app.state, "search_indexer", None)
+    frame_indexer = getattr(request.app.state, "search_frame_indexer", None)
     if indexer is None:
-        return {"job_id": job_id, "indexed_doc_count": 0, "search_enabled": False}
+        return {
+            "job_id": job_id,
+            "indexed_doc_count": 0,
+            "search_enabled": False,
+            "indexed_frame_count": 0,
+            "frame_search_enabled": False,
+        }
     count = await asyncio.to_thread(indexer.get_job_doc_count, job_id)
-    return {"job_id": job_id, "indexed_doc_count": count, "search_enabled": True}
+    frame_count = 0
+    if frame_indexer is not None:
+        frame_count = await asyncio.to_thread(frame_indexer.get_job_frame_count, job_id)
+    return {
+        "job_id": job_id,
+        "indexed_doc_count": count,
+        "search_enabled": True,
+        "indexed_frame_count": frame_count,
+        "frame_search_enabled": frame_indexer is not None,
+    }
 
 
 @router.post("/jobs/{job_id}/search-reindex", status_code=status.HTTP_202_ACCEPTED)
@@ -133,7 +157,26 @@ async def reindex_job_search(job_id: str, store: StoreDep, request: Request) -> 
                 )
                 reindexed += 1
 
-    return {"job_id": job_id, "events_reindexed": reindexed, "status": "completed"}
+    # Also reindex frames if FrameIndexer is available
+    frame_indexer = getattr(request.app.state, "search_frame_indexer", None)
+    frames_indexed = 0
+    if frame_indexer is not None:
+        settings: Settings = request.app.state.settings
+        await asyncio.to_thread(frame_indexer.delete_job_frames, job_id)
+        frames_indexed = await asyncio.to_thread(
+            frame_indexer.index_video_frames,
+            job.id,
+            job.source_path,
+            settings.frame_sample_fps,
+            settings.frame_max_frames_per_job,
+        )
+
+    return {
+        "job_id": job_id,
+        "events_reindexed": reindexed,
+        "frames_indexed": frames_indexed,
+        "status": "completed",
+    }
 
 
 def _event_to_dict(e: EventRecord) -> dict:
@@ -827,4 +870,13 @@ async def search_index_status(request: Request) -> SearchIndexStatus:
     import asyncio
 
     raw = await asyncio.to_thread(indexer.get_status)
+    frame_indexer = getattr(request.app.state, "search_frame_indexer", None)
+    if frame_indexer is not None:
+        try:
+            frame_status = await asyncio.to_thread(frame_indexer.get_status)
+            raw["frame_search_enabled"] = frame_status.get("enabled", False)
+            raw["total_frames"] = frame_status.get("total_frames", 0)
+            raw["frame_embed_model"] = frame_status.get("frame_embed_model", "")
+        except Exception:
+            pass
     return SearchIndexStatus(**raw)

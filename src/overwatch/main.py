@@ -57,6 +57,31 @@ async def _backfill_search_index(store, indexer, limit: int) -> None:
         logger.exception("Search back-fill failed")
 
 
+async def _backfill_frame_index(store, frame_indexer, settings) -> None:
+    """Backfill SigLIP frame embeddings for completed jobs not yet frame-indexed."""
+    try:
+        jobs = await store.list_jobs(limit=settings.search_backfill_limit)
+        already_indexed = await asyncio.to_thread(frame_indexer.get_indexed_job_ids)
+        count = 0
+        for job in jobs:
+            if job.status != "completed" or job.id in already_indexed:
+                continue
+            n = await asyncio.to_thread(
+                frame_indexer.index_video_frames,
+                job.id,
+                job.source_path,
+                settings.frame_sample_fps,
+                settings.frame_max_frames_per_job,
+            )
+            if n:
+                count += 1
+                logger.debug("Frame back-fill: %d frames for job %s", n, job.id)
+        if count:
+            logger.info("Frame back-fill: indexed frames for %d existing jobs", count)
+    except Exception:
+        logger.exception("Frame back-fill failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = Settings()
@@ -68,8 +93,9 @@ async def lifespan(app: FastAPI):
     stop = asyncio.Event()
     app.state._stop = stop
 
-    # --- Search indexer (optional, disabled if packages missing or SEARCH_ENABLED=false) ---
+    # --- Text search indexer (optional) ---
     indexer = None
+    frame_indexer = None
     retriever = None
     if settings.search_enabled:
         try:
@@ -79,7 +105,6 @@ async def lifespan(app: FastAPI):
             chroma_dir = settings.data_dir / "chroma"
             indexer = SearchIndexer(chroma_dir, embedding_model=settings.search_embedding_model)
             await asyncio.to_thread(indexer.initialize)
-            retriever = SearchRetriever(indexer, settings)
             asyncio.create_task(
                 _backfill_search_index(store, indexer, limit=settings.search_backfill_limit)
             )
@@ -90,12 +115,35 @@ async def lifespan(app: FastAPI):
                 "or set SEARCH_ENABLED=false to suppress this warning."
             )
             indexer = None
-            retriever = None
+
+        # --- Frame-level SigLIP indexer (optional, requires text indexer) ---
+        if indexer is not None and settings.frame_search_enabled:
+            try:
+                from overwatch.search.frame_indexer import FrameIndexer
+
+                chroma_dir = settings.data_dir / "chroma"
+                frame_indexer = FrameIndexer(
+                    chroma_dir, model_name=settings.frame_embed_model
+                )
+                await asyncio.to_thread(frame_indexer.initialize)
+                asyncio.create_task(_backfill_frame_index(store, frame_indexer, settings))
+            except Exception:
+                logger.exception(
+                    "Frame indexer (SigLIP) failed to initialize — frame search disabled. "
+                    "Set FRAME_SEARCH_ENABLED=false to suppress this warning."
+                )
+                frame_indexer = None
+
+        if indexer is not None:
+            retriever = SearchRetriever(indexer, settings, frame_indexer=frame_indexer)
 
     app.state.search_indexer = indexer
+    app.state.search_frame_indexer = frame_indexer
     app.state.search_retriever = retriever
 
-    worker_task = asyncio.create_task(worker_loop(store, settings, stop, indexer=indexer))
+    worker_task = asyncio.create_task(
+        worker_loop(store, settings, stop, indexer=indexer, frame_indexer=frame_indexer)
+    )
 
     folder = FolderIngest(settings, store)
 
@@ -119,11 +167,12 @@ async def lifespan(app: FastAPI):
     )
 
     logger.info(
-        "Overwatch %s — data_dir=%s ingest_dir=%s search=%s",
+        "Overwatch %s — data_dir=%s ingest_dir=%s search=%s frames=%s",
         __version__,
         settings.data_dir,
         settings.ingest_dir,
         "enabled" if indexer else "disabled",
+        "enabled" if frame_indexer else "disabled",
     )
 
     yield

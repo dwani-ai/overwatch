@@ -82,6 +82,31 @@ class Settings(BaseSettings):
         description="Allow search queries to request LLM-synthesized answers (synthesize_answer=true).",
     )
 
+    # Frame-level SigLIP embedding search (requires Pillow + transformers)
+    frame_search_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable cross-modal text-to-frame search using SigLIP-ViT embeddings. "
+            "Requires SEARCH_ENABLED=true.  Set to false to disable frame indexing."
+        ),
+    )
+    frame_embed_model: str = Field(
+        default="google/siglip-base-patch16-224",
+        description="HuggingFace model ID for SigLIP frame embeddings.",
+    )
+    frame_sample_fps: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=5.0,
+        description="Frames per second to sample from each video for frame indexing.",
+    )
+    frame_max_frames_per_job: int = Field(
+        default=500,
+        ge=10,
+        le=5000,
+        description="Maximum number of frames to index per job.",
+    )
+
     # Comma-separated origins for browser UI (http://localhost omits :80; include :3000 if you remap the UI port)
     cors_origins: str = Field(
         default=(

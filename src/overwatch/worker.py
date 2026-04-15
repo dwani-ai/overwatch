@@ -20,6 +20,7 @@ from overwatch.video import extract_segment_mp4, ffprobe, plan_chunks
 from overwatch.vllm_client import chat_completion, extract_assistant_text, fetch_models
 
 if TYPE_CHECKING:
+    from overwatch.search.frame_indexer import FrameIndexer
     from overwatch.search.indexer import SearchIndexer
 
 logger = logging.getLogger(__name__)
@@ -75,10 +76,27 @@ async def _extract_chunk_mp4(
     )
 
 
+async def _index_frames_background(
+    frame_indexer: FrameIndexer,
+    job_id: str,
+    source_path: str,
+    fps: float,
+    max_frames: int,
+) -> None:
+    try:
+        n = await asyncio.to_thread(
+            frame_indexer.index_video_frames, job_id, source_path, fps, max_frames
+        )
+        logger.info("Frame search: indexed %d frames for job %s", n, job_id)
+    except Exception:
+        logger.exception("Frame indexing failed for job %s", job_id)
+
+
 async def process_one_job(
     store: JobStore,
     settings: Settings,
     indexer: SearchIndexer | None = None,
+    frame_indexer: FrameIndexer | None = None,
 ) -> bool:
     job = await store.next_pending_job()
     if job is None:
@@ -244,6 +262,19 @@ async def process_one_job(
         await store.update_job_status(job.id, JobStatus.completed)
         if fp:
             await store.record_processed_file(job.source_path, str(fp), job.id)
+
+        # Fire-and-forget frame embedding after job completes
+        if frame_indexer is not None:
+            asyncio.create_task(
+                _index_frames_background(
+                    frame_indexer,
+                    job.id,
+                    str(path),
+                    settings.frame_sample_fps,
+                    settings.frame_max_frames_per_job,
+                )
+            )
+
         return True
 
     except Exception as e:
@@ -264,8 +295,11 @@ async def worker_loop(
     settings: Settings,
     stop: asyncio.Event,
     indexer: SearchIndexer | None = None,
+    frame_indexer: FrameIndexer | None = None,
 ) -> None:
     while not stop.is_set():
-        worked = await process_one_job(store, settings, indexer=indexer)
+        worked = await process_one_job(
+            store, settings, indexer=indexer, frame_indexer=frame_indexer
+        )
         if not worked:
             await asyncio.sleep(settings.worker_poll_interval_sec)

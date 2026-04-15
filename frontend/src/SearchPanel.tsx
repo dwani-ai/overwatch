@@ -15,6 +15,7 @@ const AGENT_TYPE_OPTIONS = [
   { value: "loss_prevention", label: "Loss Prevention" },
   { value: "perimeter_chain", label: "Perimeter" },
   { value: "privacy_review", label: "Privacy" },
+  { value: "frame_embed", label: "Frames" },
 ] as const;
 
 const AGENT_TYPE_LABELS: Record<string, string> = Object.fromEntries(
@@ -28,6 +29,7 @@ const CONTENT_TYPE_LABELS: Record<string, string> = {
   security: "Security",
   logistics: "Logistics",
   agent_text: "Agent",
+  frame: "Frame",
 };
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -70,6 +72,7 @@ function SourceChip({
   onNavigateToJob?: (jobId: string) => void;
 }) {
   const { source } = result;
+  const isFrame = source.content_type === "frame" || source.agent_type === "frame_embed";
   const ts = source.start_pts_ms !== null ? formatTimestamp(source.start_pts_ms) : null;
   const agentLabel = AGENT_TYPE_LABELS[source.agent_type] ?? source.agent_type;
   const contentLabel = CONTENT_TYPE_LABELS[source.content_type] ?? source.content_type;
@@ -82,13 +85,14 @@ function SourceChip({
   };
 
   return (
-    <div className="search-source">
+    <div className={`search-source${isFrame ? " search-source-frame" : ""}`}>
       <button
         type="button"
         className="search-source-file"
         title={`${source.source_path}\nClick to open job`}
         onClick={handleFileClick}
       >
+        {isFrame && <span className="frame-icon" aria-label="frame">🎞</span>}
         {source.video_filename || source.job_id.slice(0, 8)}
       </button>
       {ts && (
@@ -96,8 +100,10 @@ function SourceChip({
           ⏱ {ts}
         </span>
       )}
-      <span className="search-source-tag">{agentLabel}</span>
-      <span className="search-source-tag search-source-tag-content">{contentLabel}</span>
+      {!isFrame && <span className="search-source-tag">{agentLabel}</span>}
+      <span className={`search-source-tag${isFrame ? " search-source-tag-frame" : " search-source-tag-content"}`}>
+        {contentLabel}
+      </span>
       {source.severity && sevColor && (
         <span className="search-source-tag" style={{ color: sevColor, borderColor: sevColor }}>
           {source.severity}
@@ -119,8 +125,9 @@ function ResultCard({
   index: number;
   onNavigateToJob?: (jobId: string) => void;
 }) {
+  const isFrame = result.source.content_type === "frame" || result.source.agent_type === "frame_embed";
   return (
-    <div className="search-result-card">
+    <div className={`search-result-card${isFrame ? " search-result-card-frame" : ""}`}>
       <div className="search-result-rank">#{index + 1}</div>
       <p className="search-result-text">{result.text}</p>
       <SourceChip result={result} onNavigateToJob={onNavigateToJob} />
@@ -176,16 +183,21 @@ export function JobSearchBadge({
       />
       <span className="muted small">
         {status.search_enabled
-          ? `${status.indexed_doc_count} search docs`
+          ? `${status.indexed_doc_count} docs`
           : "search unavailable"}
       </span>
+      {status.frame_search_enabled && (
+        <span className="muted small" title="SigLIP frame embeddings indexed">
+          · 🎞 {status.indexed_frame_count} frames
+        </span>
+      )}
       {status.search_enabled && (
         <button
           type="button"
           className="linkish small"
           onClick={handleReindex}
           disabled={reindexing}
-          title="Re-index this job in the search index"
+          title="Re-index this job (text + frames)"
         >
           {reindexing ? "Reindexing…" : "Reindex"}
         </button>
@@ -317,8 +329,11 @@ export default function SearchPanel({
           <span className={`search-index-dot ${indexStatus.enabled ? "dot-ok" : "dot-off"}`} />
           {indexStatus.enabled ? (
             <span className="muted small">
-              {indexStatus.total_documents.toLocaleString()} docs indexed ·{" "}
-              {indexStatus.embedding_model}
+              {indexStatus.total_documents.toLocaleString()} text docs
+              {indexStatus.frame_search_enabled && (
+                <> · <span title="SigLIP-ViT frame embeddings">🎞 {indexStatus.total_frames.toLocaleString()} frames</span></>
+              )}
+              {" · "}{indexStatus.embedding_model}
             </span>
           ) : (
             <span className="error small">Search index unavailable</span>

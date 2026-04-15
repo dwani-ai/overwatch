@@ -42,6 +42,10 @@ class SearchQuery(BaseModel):
         default=False,
         description="Generate a short LLM answer from the top results (requires VLLM_BASE_URL).",
     )
+    include_frames: bool = Field(
+        default=True,
+        description="Include frame-level SigLIP embedding results alongside text analysis results.",
+    )
 
 
 class SearchResponse(BaseModel):
@@ -56,3 +60,6 @@ class SearchIndexStatus(BaseModel):
     total_documents: int
     collection_name: str
     embedding_model: str
+    frame_search_enabled: bool = False
+    total_frames: int = 0
+    frame_embed_model: str = ""

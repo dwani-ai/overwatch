@@ -744,3 +744,34 @@ input[type="file"] {
   padding-top: 0.6rem;
   border-top: 1px solid #2f3d52;
 }
+
+/* Frame search result card — distinct background to separate from text results */
+.search-result-card-frame {
+  background: #0d1b2a;
+  border-color: #1e3a5f;
+}
+
+.search-result-card-frame .search-result-text {
+  color: #94a3b8;
+  font-style: italic;
+}
+
+/* Frame source row */
+.search-source-frame .search-source-file {
+  color: #7dd3fc;
+}
+
+.search-source-frame .search-source-file:hover {
+  color: #bae6fd;
+}
+
+.search-source-tag-frame {
+  color: #38bdf8;
+  border-color: #0369a1;
+  background: rgba(14, 78, 130, 0.25);
+}
+
+.frame-icon {
+  margin-right: 0.25rem;
+  font-style: normal;
+}

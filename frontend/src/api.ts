@@ -436,6 +436,9 @@ export type SearchIndexStatus = {
   total_documents: number;
   collection_name: string;
   embedding_model: string;
+  frame_search_enabled: boolean;
+  total_frames: number;
+  frame_embed_model: string;
 };
 
 export type SearchQuery = {
@@ -445,6 +448,7 @@ export type SearchQuery = {
   agent_types?: string[] | null;
   severity?: string | null;
   synthesize_answer?: boolean;
+  include_frames?: boolean;
 };
 
 export async function searchEvents(q: SearchQuery): Promise<SearchResponse> {
@@ -467,6 +471,8 @@ export type JobSearchStatus = {
   job_id: string;
   indexed_doc_count: number;
   search_enabled: boolean;
+  indexed_frame_count: number;
+  frame_search_enabled: boolean;
 };
 
 export async function getJobSearchStatus(jobId: string): Promise<JobSearchStatus> {
@@ -477,7 +483,7 @@ export async function getJobSearchStatus(jobId: string): Promise<JobSearchStatus
 
 export async function reindexJobSearch(
   jobId: string,
-): Promise<{ job_id: string; events_reindexed: number; status: string }> {
+): Promise<{ job_id: string; events_reindexed: number; frames_indexed: number; status: string }> {
   const r = await apiFetch(`/jobs/${jobId}/search-reindex`, { method: "POST" });
   if (r.status !== 202) throw new Error(formatHttpError(r.status, await r.text()));
   return r.json();
