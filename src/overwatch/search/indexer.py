@@ -281,6 +281,18 @@ class SearchIndexer:
                 texts.append(text)
                 metas.append({**base_meta, "content_type": "logistics", "severity": ""})
 
+        # Raw observation items from the multimodal pass (what/where/when)
+        for i, obs_item in enumerate(payload.get("observations", []) or []):
+            what = str(obs_item.get("what", "")).strip()
+            where_approx = str(obs_item.get("where_approx") or "").strip()
+            when_hint = str(obs_item.get("when_hint") or "").strip()
+            parts = [p for p in [what, where_approx, when_hint] if p]
+            text = " · ".join(parts)
+            if text:
+                ids.append(_doc_id(job_id, chunk_index, "observation", i))
+                texts.append(text)
+                metas.append({**base_meta, "content_type": "observation", "severity": ""})
+
         self._upsert(ids, texts, metas)
 
     def index_agent_result(
@@ -413,6 +425,42 @@ class SearchIndexer:
         """Return set of job IDs that have at least one document indexed."""
         with self._lock:
             return set(self._doc_jobid.values())
+
+    def get_job_doc_count(self, job_id: str) -> int:
+        """Return the number of indexed documents for a specific job."""
+        if self._collection is None:
+            return 0
+        try:
+            result = self._collection.get(where={"job_id": job_id}, include=[])
+            return len(result.get("ids", []) or [])
+        except Exception:
+            logger.exception("get_job_doc_count failed for %s", job_id)
+            return 0
+
+    def delete_job_docs(self, job_id: str) -> int:
+        """
+        Remove all ChromaDB documents for a job and update the in-memory BM25 corpus.
+        Returns the number of documents deleted.
+        """
+        if self._collection is None:
+            return 0
+        try:
+            result = self._collection.get(where={"job_id": job_id}, include=[])
+            ids_to_delete: list[str] = result.get("ids", []) or []
+            if ids_to_delete:
+                self._collection.delete(ids=ids_to_delete)
+            with self._lock:
+                id_set = set(ids_to_delete)
+                keep = [i for i, did in enumerate(self._bm25_ids) if did not in id_set]
+                self._bm25_ids = [self._bm25_ids[i] for i in keep]
+                self._bm25_corpus = [self._bm25_corpus[i] for i in keep]
+                self._doc_jobid = {k: v for k, v in self._doc_jobid.items() if v != job_id}
+                self._dirty = True
+            logger.info("Deleted %d search docs for job %s", len(ids_to_delete), job_id)
+            return len(ids_to_delete)
+        except Exception:
+            logger.exception("delete_job_docs failed for %s", job_id)
+            return 0
 
     def get_status(self) -> dict[str, Any]:
         count = self._collection.count() if self._collection else 0

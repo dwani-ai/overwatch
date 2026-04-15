@@ -163,6 +163,18 @@ class JobStore:
         await self._conn.commit()
         return int(cur.lastrowid)
 
+    async def delete_job(self, job_id: str) -> bool:
+        """Delete a job and all its related rows. Returns False if not found."""
+        cur = await self._conn.execute("SELECT 1 FROM jobs WHERE id = ?", (job_id,))
+        if await cur.fetchone() is None:
+            return False
+        await self._conn.execute("DELETE FROM events WHERE job_id = ?", (job_id,))
+        await self._conn.execute("DELETE FROM agent_runs WHERE job_id = ?", (job_id,))
+        await self._conn.execute("DELETE FROM agent_orchestrations WHERE job_id = ?", (job_id,))
+        await self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        await self._conn.commit()
+        return True
+
     async def list_events(self, job_id: str) -> list[EventRecord]:
         cur = await self._conn.execute(
             "SELECT * FROM events WHERE job_id = ? ORDER BY id ASC",

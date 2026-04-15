@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import SearchPanel from "./SearchPanel";
+import SearchPanel, { JobSearchBadge } from "./SearchPanel";
 import type {
   AgentKind,
   AgentRunPublic,
@@ -17,6 +17,7 @@ import {
   createAgentRun,
   CROSS_INDUSTRY_AGENT_PIPELINE,
   DEFAULT_AGENT_PIPELINE,
+  deleteJob,
   getJob,
   getSummary,
   INDUSTRY_PACK_OPTIONS,
@@ -50,6 +51,9 @@ export default function App() {
   const [recentJobsError, setRecentJobsError] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [phase, setPhase] = useState<string>("");
+  const [searchScopeJobId, setSearchScopeJobId] = useState<string | null>(null);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const refreshRecentJobs = useCallback(async () => {
     setRecentJobsError(null);
@@ -63,6 +67,29 @@ export default function App() {
       setRecentJobsLoading(false);
     }
   }, []);
+
+  const searchThisJob = useCallback((jobId: string) => {
+    setSearchScopeJobId(jobId);
+    setTimeout(() => {
+      document.getElementById("search-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  }, []);
+
+  const onDeleteJob = useCallback(async (jobId: string) => {
+    if (!confirm("Delete this job and all its data? This cannot be undone.")) return;
+    setDeleting(true);
+    setDeleteErr(null);
+    try {
+      await deleteJob(jobId);
+      setJob(null);
+      setSummary(null);
+      await refreshRecentJobs();
+    } catch (e) {
+      setDeleteErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
+    }
+  }, [refreshRecentJobs]);
 
   useEffect(() => {
     refreshRecentJobs();
@@ -219,11 +246,44 @@ export default function App() {
         {err ? <p className="error">{err}</p> : null}
       </section>
 
-      <SearchPanel />
+      <SearchPanel
+        scopeJobId={searchScopeJobId}
+        onClearScope={() => setSearchScopeJobId(null)}
+        recentJobs={recentJobs}
+        onNavigateToJob={(jobId) => {
+          setSearchScopeJobId(null);
+          openJob(jobId);
+          setTimeout(() => {
+            document.getElementById("job-detail")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 80);
+        }}
+      />
 
       {job ? (
-        <section className="card">
-          <h2>Job</h2>
+        <section className="card" id="job-detail">
+          <div className="job-detail-header">
+            <h2>Job</h2>
+            <div className="job-detail-actions">
+              <button
+                type="button"
+                className="linkish small"
+                onClick={() => searchThisJob(job.id)}
+                title="Search within this video only"
+              >
+                Search this job
+              </button>
+              <button
+                type="button"
+                className="linkish small danger"
+                onClick={() => onDeleteJob(job.id)}
+                disabled={deleting}
+                title="Delete this job and all its data"
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+          {deleteErr && <p className="error small">{deleteErr}</p>}
           <dl className="kv">
             <dt>ID</dt>
             <dd className="mono">{job.id}</dd>
@@ -238,6 +298,9 @@ export default function App() {
               </>
             ) : null}
           </dl>
+          {job.status === "completed" && (
+            <JobSearchBadge jobId={job.id} />
+          )}
         </section>
       ) : null}
 

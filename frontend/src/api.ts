@@ -462,3 +462,28 @@ export async function getSearchIndexStatus(): Promise<SearchIndexStatus> {
   if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
   return r.json();
 }
+
+export type JobSearchStatus = {
+  job_id: string;
+  indexed_doc_count: number;
+  search_enabled: boolean;
+};
+
+export async function getJobSearchStatus(jobId: string): Promise<JobSearchStatus> {
+  const r = await apiFetch(`/jobs/${jobId}/search-status`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function reindexJobSearch(
+  jobId: string,
+): Promise<{ job_id: string; events_reindexed: number; status: string }> {
+  const r = await apiFetch(`/jobs/${jobId}/search-reindex`, { method: "POST" });
+  if (r.status !== 202) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function deleteJob(jobId: string): Promise<void> {
+  const r = await apiFetch(`/jobs/${jobId}`, { method: "DELETE" });
+  if (r.status !== 204) throw new Error(formatHttpError(r.status, await r.text()));
+}

@@ -270,6 +270,7 @@ async def run_structured_chunk_analysis(
         "end_frame": chunk.end_frame,
         "segment_bytes": len(mp4_bytes),
         "merged": merged.model_dump(),
+        "observations": [o.model_dump() for o in obs.observations] if obs else [],
         "meta": {
             "observe_ok": obs is not None,
             "specialist_ok": {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from pathlib import Path
@@ -46,8 +47,12 @@ StoreDep = Annotated[JobStore, Depends(get_store)]
 
 
 @router.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health(request: Request) -> dict[str, Any]:
+    indexer = getattr(request.app.state, "search_indexer", None)
+    return {
+        "status": "ok",
+        "search": "ready" if indexer is not None else "unavailable",
+    }
 
 
 @router.get("/jobs", response_model=list[JobRecord])
@@ -61,6 +66,74 @@ async def get_job(job_id: str, store: StoreDep) -> JobRecord:
         return await store.get_job(job_id)
     except KeyError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+
+@router.delete("/jobs/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_job(job_id: str, store: StoreDep, request: Request) -> None:
+    """Delete a job and all its events, agent runs, and search index documents."""
+    found = await store.delete_job(job_id)
+    if not found:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    indexer = getattr(request.app.state, "search_indexer", None)
+    if indexer is not None:
+        try:
+            await asyncio.to_thread(indexer.delete_job_docs, job_id)
+        except Exception:
+            pass  # deletion already committed — log only
+
+
+@router.get("/jobs/{job_id}/search-status")
+async def job_search_status(job_id: str, store: StoreDep, request: Request) -> dict[str, Any]:
+    """Return the number of search-index documents for this job."""
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    indexer = getattr(request.app.state, "search_indexer", None)
+    if indexer is None:
+        return {"job_id": job_id, "indexed_doc_count": 0, "search_enabled": False}
+    count = await asyncio.to_thread(indexer.get_job_doc_count, job_id)
+    return {"job_id": job_id, "indexed_doc_count": count, "search_enabled": True}
+
+
+@router.post("/jobs/{job_id}/search-reindex", status_code=status.HTTP_202_ACCEPTED)
+async def reindex_job_search(job_id: str, store: StoreDep, request: Request) -> dict[str, Any]:
+    """
+    Delete and rebuild the search index for a specific job from its stored events.
+    Useful after upgrading the indexer schema or enabling search on existing data.
+    """
+    indexer = getattr(request.app.state, "search_indexer", None)
+    if indexer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Search indexer is not available.",
+        )
+    try:
+        job = await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    events = await store.list_events(job_id)
+
+    await asyncio.to_thread(indexer.delete_job_docs, job_id)
+
+    reindexed = 0
+    for ev in events:
+        if ev.event_type == "chunk_analysis":
+            await asyncio.to_thread(
+                indexer.index_chunk_analysis, job.id, job.source_path, ev.payload
+            )
+            reindexed += 1
+        elif ev.event_type.startswith("agent_"):
+            agent_kind = ev.payload.get("agent_id")
+            result = ev.payload.get("result")
+            if agent_kind and result and not ev.payload.get("error"):
+                await asyncio.to_thread(
+                    indexer.index_agent_result, job.id, job.source_path, agent_kind, result
+                )
+                reindexed += 1
+
+    return {"job_id": job_id, "events_reindexed": reindexed, "status": "completed"}
 
 
 def _event_to_dict(e: EventRecord) -> dict:

@@ -561,16 +561,6 @@ input[type="file"] {
   gap: 0.35rem;
 }
 
-.search-source-file {
-  font-size: 0.78rem;
-  font-weight: 600;
-  color: #93c5fd;
-  max-width: 14rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .search-source-ts {
   font-size: 0.75rem;
   color: #8b98a5;
@@ -596,4 +586,161 @@ input[type="file"] {
   font-size: 0.72rem;
   color: #4a5568;
   font-variant-numeric: tabular-nums;
+}
+
+/* Search options row (AI answer + filters toggle) */
+.search-options-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.search-filter-toggle {
+  color: #8b98a5;
+}
+
+.search-filter-toggle.active {
+  color: #60a5fa;
+}
+
+.search-filter-toggle.has-filters {
+  color: #f59e0b;
+  font-weight: 600;
+}
+
+/* Scope banner */
+.search-scope-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.5rem 0 0.25rem;
+  padding: 0.35rem 0.6rem;
+  background: #0f1a27;
+  border: 1px solid #2563eb44;
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+/* Filter panel */
+.search-filters {
+  margin-top: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  background: #0f1827;
+  border: 1px solid #2f3d52;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.search-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.search-filter-row-pills {
+  align-items: flex-start;
+}
+
+.search-filter-label {
+  min-width: 4.5rem;
+  color: #8b98a5;
+}
+
+.search-filter-select {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+  background: #131b26;
+  color: #e7ecf1;
+  border: 1px solid #2f3d52;
+  border-radius: 6px;
+  min-width: 10rem;
+}
+
+.search-agent-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.search-agent-pill {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  background: transparent;
+  color: #8b98a5;
+  border: 1px solid #2f3d52;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.search-agent-pill:hover {
+  border-color: #4a5568;
+  color: #cbd5e1;
+}
+
+.search-agent-pill.selected {
+  background: #1e3a5f;
+  color: #93c5fd;
+  border-color: #2563eb;
+}
+
+/* Source file chip — now a button for click-through */
+.search-source-file {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #93c5fd;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.search-source-file:hover {
+  text-decoration: underline;
+  color: #bfdbfe;
+}
+
+/* Job detail header */
+.job-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.4rem;
+}
+
+.job-detail-header h2 {
+  margin: 0;
+}
+
+.job-detail-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.danger {
+  color: #f87171;
+}
+
+.danger:hover {
+  color: #fca5a5;
+}
+
+/* Job search badge (below job detail dl) */
+.job-search-badge {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid #2f3d52;
 }
