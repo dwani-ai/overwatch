@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import SearchPanel from "./SearchPanel";
 import type {
   AgentKind,
   AgentRunPublic,
@@ -217,6 +218,8 @@ export default function App() {
         {phase ? <p className="phase">{phase}</p> : null}
         {err ? <p className="error">{err}</p> : null}
       </section>
+
+      <SearchPanel />
 
       {job ? (
         <section className="card">

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from overwatch.analysis.chunk_pipeline import job_summary_from_chunks, run_structured_chunk_analysis
 from overwatch.config import Settings
@@ -17,6 +18,9 @@ from overwatch.models import (
 from overwatch.store import JobStore
 from overwatch.video import extract_segment_mp4, ffprobe, plan_chunks
 from overwatch.vllm_client import chat_completion, extract_assistant_text, fetch_models
+
+if TYPE_CHECKING:
+    from overwatch.search.indexer import SearchIndexer
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +75,11 @@ async def _extract_chunk_mp4(
     )
 
 
-async def process_one_job(store: JobStore, settings: Settings) -> bool:
+async def process_one_job(
+    store: JobStore,
+    settings: Settings,
+    indexer: SearchIndexer | None = None,
+) -> bool:
     job = await store.next_pending_job()
     if job is None:
         return False
@@ -198,6 +206,20 @@ async def process_one_job(store: JobStore, settings: Settings) -> bool:
                             pts_ms=ch.start_pts_ms,
                             payload=analysis,
                         )
+                        if indexer is not None:
+                            try:
+                                await asyncio.to_thread(
+                                    indexer.index_chunk_analysis,
+                                    job.id,
+                                    job.source_path,
+                                    analysis,
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "Search index update failed for chunk %s",
+                                    ch.chunk_index,
+                                    exc_info=True,
+                                )
                     except Exception as e:
                         logger.exception("Chunk %s analysis failed", ch.chunk_index)
                         await store.append_event(
@@ -237,8 +259,13 @@ async def process_one_job(store: JobStore, settings: Settings) -> bool:
         return True
 
 
-async def worker_loop(store: JobStore, settings: Settings, stop: asyncio.Event) -> None:
+async def worker_loop(
+    store: JobStore,
+    settings: Settings,
+    stop: asyncio.Event,
+    indexer: SearchIndexer | None = None,
+) -> None:
     while not stop.is_set():
-        worked = await process_one_job(store, settings)
+        worked = await process_one_job(store, settings, indexer=indexer)
         if not worked:
             await asyncio.sleep(settings.worker_poll_interval_sec)

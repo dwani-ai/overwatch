@@ -59,6 +59,29 @@ class Settings(BaseSettings):
     factorio_confidence_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
     factorio_tech_tree_path: Optional[Path] = Field(default=None)
 
+    # Search / RAG (requires chromadb, sentence-transformers, rank-bm25 installed)
+    search_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable hybrid RAG search over video analysis results. "
+            "Set SEARCH_ENABLED=false to disable if search packages are not installed."
+        ),
+    )
+    search_embedding_model: str = Field(
+        default="BAAI/bge-small-en-v1.5",
+        description="Sentence-transformers model name for search embeddings.",
+    )
+    search_backfill_limit: int = Field(
+        default=200,
+        ge=0,
+        le=5000,
+        description="Max number of existing completed jobs to back-fill into the search index on startup.",
+    )
+    search_answer_enabled: bool = Field(
+        default=True,
+        description="Allow search queries to request LLM-synthesized answers (synthesize_answer=true).",
+    )
+
     # Comma-separated origins for browser UI (http://localhost omits :80; include :3000 if you remap the UI port)
     cors_origins: str = Field(
         default=(

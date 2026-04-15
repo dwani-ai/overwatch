@@ -401,3 +401,64 @@ export async function getPrivacyReview(jobId: string): Promise<AgentEventPayload
   if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
   return r.json();
 }
+
+// ---------------------------------------------------------------------------
+// Search / RAG
+// ---------------------------------------------------------------------------
+
+export type SearchSource = {
+  job_id: string;
+  source_path: string;
+  video_filename: string;
+  chunk_index: number | null;
+  start_pts_ms: number | null;
+  end_pts_ms: number | null;
+  agent_type: string;
+  content_type: string;
+  severity: string | null;
+};
+
+export type SearchResult = {
+  text: string;
+  score: number;
+  source: SearchSource;
+};
+
+export type SearchResponse = {
+  query: string;
+  answer: string | null;
+  results: SearchResult[];
+  total_found: number;
+};
+
+export type SearchIndexStatus = {
+  enabled: boolean;
+  total_documents: number;
+  collection_name: string;
+  embedding_model: string;
+};
+
+export type SearchQuery = {
+  query: string;
+  limit?: number;
+  job_ids?: string[] | null;
+  agent_types?: string[] | null;
+  severity?: string | null;
+  synthesize_answer?: boolean;
+};
+
+export async function searchEvents(q: SearchQuery): Promise<SearchResponse> {
+  const r = await apiFetch("/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(q),
+  });
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getSearchIndexStatus(): Promise<SearchIndexStatus> {
+  const r = await apiFetch("/search/index-status");
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}

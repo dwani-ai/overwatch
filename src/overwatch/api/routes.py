@@ -8,6 +8,8 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
+from overwatch.search.models import SearchIndexStatus, SearchQuery, SearchResponse
+
 from overwatch.agents.compliance_brief import AGENT_COMPLIANCE_BRIEF_EVENT
 from overwatch.agents.incident_brief import AGENT_INCIDENT_BRIEF_EVENT
 from overwatch.agents.loss_prevention import AGENT_LOSS_PREVENTION_EVENT
@@ -688,3 +690,68 @@ async def create_job(body: JobCreate, request: Request, store: StoreDep) -> JobR
         source_path=str(path),
         meta={"fingerprint": fp, "ingest": "api"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Search / RAG
+# ---------------------------------------------------------------------------
+
+
+def _get_retriever(request: Request):
+    retriever = getattr(request.app.state, "search_retriever", None)
+    if retriever is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Search is not available. "
+                "Ensure SEARCH_ENABLED=true and that chromadb, sentence-transformers, "
+                "and rank-bm25 are installed."
+            ),
+        )
+    return retriever
+
+
+def _get_indexer(request: Request):
+    indexer = getattr(request.app.state, "search_indexer", None)
+    if indexer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Search indexer is not available.",
+        )
+    return indexer
+
+
+@router.post("/search", response_model=SearchResponse)
+async def search_events(body: SearchQuery, request: Request) -> SearchResponse:
+    """
+    Hybrid RAG search over all indexed video analysis events.
+
+    Combines ChromaDB vector search with BM25 keyword search (RRF fusion).
+    Set ``synthesize_answer=true`` to generate an LLM answer from the top results
+    (requires ``VLLM_BASE_URL`` and ``SEARCH_ANSWER_ENABLED=true``).
+    """
+    retriever = _get_retriever(request)
+    settings = request.app.state.settings
+
+    # Guard against answer synthesis when disabled in config
+    if body.synthesize_answer and not settings.search_answer_enabled:
+        body = body.model_copy(update={"synthesize_answer": False})
+
+    return await retriever.search(body)
+
+
+@router.get("/search/index-status", response_model=SearchIndexStatus)
+async def search_index_status(request: Request) -> SearchIndexStatus:
+    """Return the current state of the search index."""
+    indexer = getattr(request.app.state, "search_indexer", None)
+    if indexer is None:
+        return SearchIndexStatus(
+            enabled=False,
+            total_documents=0,
+            collection_name="overwatch_events",
+            embedding_model="",
+        )
+    import asyncio
+
+    raw = await asyncio.to_thread(indexer.get_status)
+    return SearchIndexStatus(**raw)
