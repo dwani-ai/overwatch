@@ -78,18 +78,90 @@ async def _extract_chunk_mp4(
 
 async def _index_frames_background(
     frame_indexer: FrameIndexer,
+    store: JobStore,
     job_id: str,
     source_path: str,
-    fps: float,
-    max_frames: int,
+    settings: Settings,
 ) -> None:
     try:
-        n = await asyncio.to_thread(
-            frame_indexer.index_video_frames, job_id, source_path, fps, max_frames
+        result = await asyncio.to_thread(
+            frame_indexer.index_video_frames,
+            job_id,
+            source_path,
+            settings.frame_sample_fps,
+            settings.frame_max_frames_per_job,
         )
-        logger.info("Frame search: indexed %d frames for job %s", n, job_id)
+        await _store_frame_analysis_events(store, job_id, result)
+        logger.info(
+            "Frame index: %d frames, %d alerts, %d cuts, %d anomalies for job %s",
+            result.get("frame_count", 0),
+            len(result.get("visual_alerts", [])),
+            len(result.get("scene_changes", [])),
+            len(result.get("anomalies", [])),
+            job_id,
+        )
     except Exception:
         logger.exception("Frame indexing failed for job %s", job_id)
+
+
+async def _store_frame_analysis_events(
+    store: JobStore,
+    job_id: str,
+    result: dict,
+) -> None:
+    """Persist frame analysis results as job events in SQLite."""
+    # Visual alerts — one event per alert (surfaced prominently)
+    for alert in result.get("visual_alerts", []):
+        score = alert.get("score", 0.0)
+        severity = "high" if score >= 0.35 else "medium"
+        await store.append_event(
+            job_id,
+            agent=AgentTrack.pipeline,
+            event_type="visual_alert",
+            pts_ms=alert.get("pts_ms"),
+            payload=alert,
+            severity=severity,
+        )
+
+    # Scene changes — single event with full list
+    scene_changes = result.get("scene_changes", [])
+    if scene_changes:
+        await store.append_event(
+            job_id,
+            agent=AgentTrack.pipeline,
+            event_type="scene_changes",
+            payload={"changes": scene_changes, "count": len(scene_changes)},
+        )
+
+    # Occupancy timeline — single event
+    occupancy = result.get("occupancy_timeline", [])
+    if occupancy:
+        await store.append_event(
+            job_id,
+            agent=AgentTrack.pipeline,
+            event_type="frame_occupancy",
+            payload={"timeline": occupancy},
+        )
+
+    # Diversity keyframes — single event
+    keyframes = result.get("keyframes", [])
+    if keyframes:
+        await store.append_event(
+            job_id,
+            agent=AgentTrack.pipeline,
+            event_type="frame_keyframes",
+            payload={"keyframes": keyframes},
+        )
+
+    # Anomalies — single event with list
+    anomalies = result.get("anomalies", [])
+    if anomalies:
+        await store.append_event(
+            job_id,
+            agent=AgentTrack.pipeline,
+            event_type="frame_anomalies",
+            payload={"anomalies": anomalies, "count": len(anomalies)},
+        )
 
 
 async def process_one_job(
@@ -263,16 +335,10 @@ async def process_one_job(
         if fp:
             await store.record_processed_file(job.source_path, str(fp), job.id)
 
-        # Fire-and-forget frame embedding after job completes
+        # Fire-and-forget frame embedding + analysis after job completes
         if frame_indexer is not None:
             asyncio.create_task(
-                _index_frames_background(
-                    frame_indexer,
-                    job.id,
-                    str(path),
-                    settings.frame_sample_fps,
-                    settings.frame_max_frames_per_job,
-                )
+                _index_frames_background(frame_indexer, store, job.id, str(path), settings)
             )
 
         return True

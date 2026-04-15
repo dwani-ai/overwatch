@@ -58,7 +58,9 @@ async def _backfill_search_index(store, indexer, limit: int) -> None:
 
 
 async def _backfill_frame_index(store, frame_indexer, settings) -> None:
-    """Backfill SigLIP frame embeddings for completed jobs not yet frame-indexed."""
+    """Backfill SigLIP frame embeddings + analysis events for existing completed jobs."""
+    from overwatch.worker import _store_frame_analysis_events
+
     try:
         jobs = await store.list_jobs(limit=settings.search_backfill_limit)
         already_indexed = await asyncio.to_thread(frame_indexer.get_indexed_job_ids)
@@ -66,18 +68,18 @@ async def _backfill_frame_index(store, frame_indexer, settings) -> None:
         for job in jobs:
             if job.status != "completed" or job.id in already_indexed:
                 continue
-            n = await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 frame_indexer.index_video_frames,
                 job.id,
                 job.source_path,
                 settings.frame_sample_fps,
                 settings.frame_max_frames_per_job,
             )
-            if n:
+            if result.get("frame_count", 0):
+                await _store_frame_analysis_events(store, job.id, result)
                 count += 1
-                logger.debug("Frame back-fill: %d frames for job %s", n, job.id)
         if count:
-            logger.info("Frame back-fill: indexed frames for %d existing jobs", count)
+            logger.info("Frame back-fill: indexed frames + analysis for %d existing jobs", count)
     except Exception:
         logger.exception("Frame back-fill failed")
 
@@ -119,13 +121,26 @@ async def lifespan(app: FastAPI):
         # --- Frame-level SigLIP indexer (optional, requires text indexer) ---
         if indexer is not None and settings.frame_search_enabled:
             try:
-                from overwatch.search.frame_indexer import FrameIndexer
+                from overwatch.search.frame_indexer import FrameAnalysisConfig, FrameIndexer
 
                 chroma_dir = settings.data_dir / "chroma"
                 frame_indexer = FrameIndexer(
                     chroma_dir, model_name=settings.frame_embed_model
                 )
-                await asyncio.to_thread(frame_indexer.initialize)
+                analysis_cfg = FrameAnalysisConfig(
+                    visual_alert_enabled=settings.visual_alert_enabled,
+                    visual_alert_prompts=[
+                        p.strip() for p in settings.visual_alert_prompts.split(",") if p.strip()
+                    ],
+                    visual_alert_threshold=settings.visual_alert_threshold,
+                    scene_change_enabled=settings.scene_change_enabled,
+                    scene_change_threshold=settings.scene_change_threshold,
+                    occupancy_scoring_enabled=settings.occupancy_scoring_enabled,
+                    keyframe_count=settings.frame_keyframe_count,
+                    anomaly_detection_enabled=settings.anomaly_detection_enabled,
+                    anomaly_threshold=settings.anomaly_threshold,
+                )
+                await asyncio.to_thread(frame_indexer.initialize, analysis_cfg)
                 asyncio.create_task(_backfill_frame_index(store, frame_indexer, settings))
             except Exception:
                 logger.exception(

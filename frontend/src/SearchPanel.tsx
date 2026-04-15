@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { JobRecord, JobSearchStatus, SearchIndexStatus, SearchResult } from "./api";
-import { getJobSearchStatus, getSearchIndexStatus, reindexJobSearch, searchEvents } from "./api";
+import { getJobSearchStatus, getSearchIndexStatus, reindexJobSearch, searchByImage, searchEvents } from "./api";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -236,6 +236,9 @@ export default function SearchPanel({
   const [answer, setAnswer] = useState<string | null>(null);
   const [totalFound, setTotalFound] = useState<number | null>(null);
   const [indexStatus, setIndexStatus] = useState<SearchIndexStatus | null>(null);
+  const [searchMode, setSearchMode] = useState<"text" | "image">("text");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imageDragOver, setImageDragOver] = useState(false);
 
   // Filters
   const [showFilters, setShowFilters] = useState(false);
@@ -280,32 +283,42 @@ export default function SearchPanel({
   };
 
   const onSearch = useCallback(async () => {
-    const q = query.trim();
-    if (!q) return;
     setLoading(true);
     setError(null);
     setResults(null);
     setAnswer(null);
     setTotalFound(null);
     try {
-      const resp = await searchEvents({
-        query: q,
-        limit: 15,
-        synthesize_answer: synthesize,
-        include_frames: includeFrames,
-        job_ids: filterJobId ? [filterJobId] : null,
-        agent_types: filterAgentTypes.size > 0 ? Array.from(filterAgentTypes) : null,
-        severity: filterSeverity || null,
-      });
-      setResults(resp.results);
-      setAnswer(resp.answer ?? null);
-      setTotalFound(resp.total_found);
+      if (searchMode === "image") {
+        if (!imageFile) return;
+        const resp = await searchByImage(imageFile, {
+          limit: 15,
+          jobIds: filterJobId ? [filterJobId] : undefined,
+        });
+        setResults(resp.results);
+        setTotalFound(resp.total_found);
+      } else {
+        const q = query.trim();
+        if (!q) return;
+        const resp = await searchEvents({
+          query: q,
+          limit: 15,
+          synthesize_answer: synthesize,
+          include_frames: includeFrames,
+          job_ids: filterJobId ? [filterJobId] : null,
+          agent_types: filterAgentTypes.size > 0 ? Array.from(filterAgentTypes) : null,
+          severity: filterSeverity || null,
+        });
+        setResults(resp.results);
+        setAnswer(resp.answer ?? null);
+        setTotalFound(resp.total_found);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [query, synthesize, includeFrames, filterJobId, filterAgentTypes, filterSeverity]);
+  }, [searchMode, query, imageFile, synthesize, includeFrames, filterJobId, filterAgentTypes, filterSeverity]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") onSearch();
@@ -366,37 +379,110 @@ export default function SearchPanel({
         </div>
       )}
 
-      <div className="search-input-row">
-        <input
-          ref={inputRef}
-          className="search-input"
-          type="text"
-          placeholder="e.g. forklift near dock, unauthorized access, fire door open…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={onKeyDown}
-          disabled={loading}
-        />
+      {/* Mode tabs */}
+      <div className="search-mode-tabs">
         <button
           type="button"
-          className="btn"
-          onClick={onSearch}
-          disabled={loading || !query.trim()}
+          className={`search-mode-tab${searchMode === "text" ? " active" : ""}`}
+          onClick={() => setSearchMode("text")}
         >
-          {loading ? "Searching…" : "Search"}
+          Text search
+        </button>
+        <button
+          type="button"
+          className={`search-mode-tab${searchMode === "image" ? " active" : ""}${!frameSearchAvailable ? " search-option-unavailable" : ""}`}
+          onClick={() => frameSearchAvailable && setSearchMode("image")}
+          title={frameSearchAvailable ? "Find frames visually similar to an uploaded image" : "Frame search unavailable — frames still indexing"}
+        >
+          🖼 Image search
         </button>
       </div>
 
-      <div className="search-options-row">
-        <label className="search-synthesize-label">
+      {searchMode === "text" ? (
+        <div className="search-input-row">
           <input
-            type="checkbox"
-            checked={synthesize}
-            onChange={(e) => setSynthesize(e.target.checked)}
+            ref={inputRef}
+            className="search-input"
+            type="text"
+            placeholder="e.g. forklift near dock, unauthorized access, fire door open…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onKeyDown}
             disabled={loading}
           />
-          <span className="small">AI answer</span>
-        </label>
+          <button
+            type="button"
+            className="btn"
+            onClick={onSearch}
+            disabled={loading || !query.trim()}
+          >
+            {loading ? "Searching…" : "Search"}
+          </button>
+        </div>
+      ) : (
+        <div className="search-image-zone">
+          <div
+            className={`image-dropzone${imageDragOver ? " drag-over" : ""}${imageFile ? " has-file" : ""}`}
+            onDragOver={(e) => { e.preventDefault(); setImageDragOver(true); }}
+            onDragLeave={() => setImageDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setImageDragOver(false);
+              const f = e.dataTransfer.files[0];
+              if (f && f.type.startsWith("image/")) setImageFile(f);
+            }}
+            onClick={() => document.getElementById("image-file-input")?.click()}
+          >
+            {imageFile ? (
+              <span className="dropzone-filename">📷 {imageFile.name}</span>
+            ) : (
+              <span className="dropzone-hint">Drop an image here or click to pick one</span>
+            )}
+          </div>
+          <input
+            id="image-file-input"
+            type="file"
+            accept="image/*"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) setImageFile(f);
+            }}
+          />
+          <button
+            type="button"
+            className="btn"
+            onClick={onSearch}
+            disabled={loading || !imageFile}
+          >
+            {loading ? "Searching…" : "Find similar frames"}
+          </button>
+          {imageFile && (
+            <button type="button" className="linkish small" onClick={() => setImageFile(null)}>
+              × clear
+            </button>
+          )}
+        </div>
+      )}
+
+      {searchMode === "image" && (
+        <p className="muted small" style={{ marginTop: "0.4rem" }}>
+          Finds video frames visually similar to your image using SigLIP embeddings — no text required.
+        </p>
+      )}
+
+      <div className="search-options-row">
+        {searchMode === "text" && (
+          <label className="search-synthesize-label">
+            <input
+              type="checkbox"
+              checked={synthesize}
+              onChange={(e) => setSynthesize(e.target.checked)}
+              disabled={loading}
+            />
+            <span className="small">AI answer</span>
+          </label>
+        )}
 
         <label
           className={`search-synthesize-label${!frameSearchAvailable ? " search-option-unavailable" : ""}`}

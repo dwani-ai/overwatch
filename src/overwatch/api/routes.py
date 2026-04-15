@@ -9,7 +9,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 
-from overwatch.search.models import SearchIndexStatus, SearchQuery, SearchResponse
+from overwatch.search.models import SearchIndexStatus, SearchQuery, SearchResponse, SearchResult, SearchSource
 
 from overwatch.agents.compliance_brief import AGENT_COMPLIANCE_BRIEF_EVENT
 from overwatch.agents.incident_brief import AGENT_INCIDENT_BRIEF_EVENT
@@ -835,6 +835,133 @@ def _get_indexer(request: Request):
             detail="Search indexer is not available.",
         )
     return indexer
+
+
+@router.get("/jobs/{job_id}/visual-alerts")
+async def get_visual_alerts(job_id: str, store: StoreDep) -> dict:
+    """Return all visual_alert events for this job (SigLIP zero-shot matches)."""
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    events = await store.list_events(job_id)
+    alerts = [
+        {
+            "event_id": e.id,
+            "pts_ms": e.pts_ms,
+            "severity": e.severity,
+            **e.payload,
+        }
+        for e in events
+        if e.event_type == "visual_alert"
+    ]
+    return {"job_id": job_id, "alerts": alerts, "count": len(alerts)}
+
+
+@router.get("/jobs/{job_id}/scene-changes")
+async def get_scene_changes(job_id: str, store: StoreDep) -> dict:
+    """Return detected scene cuts for this job."""
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    ev = await store.get_latest_event(job_id, event_type="scene_changes")
+    if ev is None:
+        return {"job_id": job_id, "changes": [], "count": 0}
+    return {"job_id": job_id, **ev.payload}
+
+
+@router.get("/jobs/{job_id}/occupancy")
+async def get_occupancy(job_id: str, store: StoreDep) -> dict:
+    """Return the per-frame occupancy density timeline for this job."""
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    ev = await store.get_latest_event(job_id, event_type="frame_occupancy")
+    if ev is None:
+        return {"job_id": job_id, "timeline": []}
+    return {"job_id": job_id, **ev.payload}
+
+
+@router.get("/jobs/{job_id}/keyframes")
+async def get_keyframes(job_id: str, store: StoreDep) -> dict:
+    """Return the diverse representative keyframe timestamps for this job."""
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    ev = await store.get_latest_event(job_id, event_type="frame_keyframes")
+    if ev is None:
+        return {"job_id": job_id, "keyframes": []}
+    return {"job_id": job_id, **ev.payload}
+
+
+@router.get("/jobs/{job_id}/anomalies")
+async def get_anomalies(job_id: str, store: StoreDep) -> dict:
+    """Return frames flagged as anomalous (far from job visual centroid)."""
+    try:
+        await store.get_job(job_id)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    ev = await store.get_latest_event(job_id, event_type="frame_anomalies")
+    if ev is None:
+        return {"job_id": job_id, "anomalies": [], "count": 0}
+    return {"job_id": job_id, **ev.payload}
+
+
+@router.post("/search/by-image", response_model=SearchResponse)
+async def search_by_image(
+    request: Request,
+    image: UploadFile = File(...),
+    limit: int = 10,
+    job_ids: str | None = None,
+) -> SearchResponse:
+    """
+    Find video frames visually similar to an uploaded image using SigLIP image embeddings.
+    Optionally restrict to specific jobs via comma-separated ``job_ids``.
+    """
+    frame_indexer = getattr(request.app.state, "search_frame_indexer", None)
+    if frame_indexer is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Frame search is not available. Ensure FRAME_SEARCH_ENABLED=true.",
+        )
+
+    image_bytes = await image.read()
+    if not image_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty image file")
+
+    jids = [j.strip() for j in job_ids.split(",") if j.strip()] if job_ids else None
+    n = min(max(limit, 1), 50)
+
+    raw = await asyncio.to_thread(frame_indexer.search_by_image, image_bytes, n, jids)
+
+    frame_ids: list[str] = (raw.get("ids") or [[]])[0] or []
+    frame_metas: list[dict] = (raw.get("metadatas") or [[]])[0] or []
+    frame_dists: list[float] = (raw.get("distances") or [[]])[0] or []
+
+    results: list[SearchResult] = []
+    for fmeta, fdist in zip(frame_metas, frame_dists):
+        pts_ms = fmeta.get("pts_ms", 0)
+        vf = fmeta.get("video_filename", "")
+        sp = fmeta.get("source_path", "")
+        ts = f"{pts_ms // 60000}:{(pts_ms // 1000) % 60:02d}"
+        text = f"Video frame at {ts}" + (f" — {vf}" if vf else "")
+        source = SearchSource(
+            job_id=fmeta.get("job_id", ""),
+            source_path=sp,
+            video_filename=vf or (Path(sp).name if sp else ""),
+            chunk_index=fmeta.get("frame_index"),
+            start_pts_ms=int(pts_ms) if pts_ms is not None else None,
+            end_pts_ms=None,
+            agent_type="frame_embed",
+            content_type="frame",
+            severity=None,
+        )
+        results.append(SearchResult(text=text, score=max(0.0, 1.0 - float(fdist)), source=source))
+
+    return SearchResponse(query=f"[image: {image.filename}]", results=results, total_found=len(frame_ids))
 
 
 @router.post("/search", response_model=SearchResponse)

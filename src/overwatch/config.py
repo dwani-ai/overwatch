@@ -107,6 +107,69 @@ class Settings(BaseSettings):
         description="Maximum number of frames to index per job.",
     )
 
+    # --- SigLIP analysis features ---
+
+    # Feature 1: Zero-shot visual alerting
+    visual_alert_enabled: bool = Field(
+        default=True,
+        description="Run configurable text prompts against every frame; emit visual_alert events.",
+    )
+    visual_alert_prompts: str = Field(
+        default=(
+            "person lying on the ground,"
+            "fire or smoke visible,"
+            "person climbing over a fence or barrier,"
+            "crowd blocking an emergency exit,"
+            "forklift operating near a pedestrian,"
+            "unattended bag or package near a doorway"
+        ),
+        description="Comma-separated list of zero-shot alert prompts matched against every frame.",
+    )
+    visual_alert_threshold: float = Field(
+        default=0.20,
+        ge=0.05,
+        le=0.95,
+        description="Minimum SigLIP cosine similarity for a frame to trigger a visual alert.",
+    )
+
+    # Feature 2: Scene change detection
+    scene_change_enabled: bool = Field(
+        default=True,
+        description="Detect scene cuts by cosine distance between consecutive frame embeddings.",
+    )
+    scene_change_threshold: float = Field(
+        default=0.25,
+        ge=0.05,
+        le=0.95,
+        description="Cosine distance threshold above which a scene change is flagged.",
+    )
+
+    # Feature 3: Occupancy density scoring
+    occupancy_scoring_enabled: bool = Field(
+        default=True,
+        description="Score every frame on an empty↔crowded axis using SigLIP probe prompts.",
+    )
+
+    # Feature 5: Visual diversity keyframes
+    frame_keyframe_count: int = Field(
+        default=8,
+        ge=2,
+        le=30,
+        description="Number of visually diverse representative keyframes to select per job.",
+    )
+
+    # Feature 6: Baseline anomaly detection
+    anomaly_detection_enabled: bool = Field(
+        default=True,
+        description="Flag frames whose embedding is far from the per-job centroid.",
+    )
+    anomaly_threshold: float = Field(
+        default=0.30,
+        ge=0.05,
+        le=0.95,
+        description="Cosine distance from job centroid above which a frame is flagged as anomalous.",
+    )
+
     # Comma-separated origins for browser UI (http://localhost omits :80; include :3000 if you remap the UI port)
     cors_origins: str = Field(
         default=(
