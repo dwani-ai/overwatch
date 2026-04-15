@@ -2,6 +2,8 @@
 
 Autonomous pipeline that analyses surveillance and operations video using a **multimodal LLM** (Gemma 4 / any OpenAI-compatible model), a **hybrid RAG search engine**, and **SigLIP-ViT visual intelligence** — all in a single Docker Compose stack.
 
+![Overwatch — One eye to watch them all](overwatch-image.png)
+
 > **Technical deep-dive:** [docs/technical_report.md](docs/technical_report.md) — architecture, data model, API surface, search system, SigLIP features, configuration, deployment, and known limitations (~18 pages).
 
 ---
