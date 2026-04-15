@@ -20,6 +20,7 @@ class SkillExecutor:
 
     max_actions_per_minute: int = 30
     dry_run: bool = True
+    allow_click: bool = True
     _window_start: float = field(default_factory=time.monotonic, repr=False)
     _count_in_window: int = field(default=0, repr=False)
 
@@ -55,13 +56,46 @@ class SkillExecutor:
             if not action.keys:
                 raise ValueError("keys action requires keys list")
             return list(action.keys)
+        if action.type == GameActionType.click:
+            return []
         raise ValueError(f"unsupported action type: {action.type}")
 
-    def execute(self, action: GameAction) -> list[str]:
-        keys = self._keys_for_action(action)
-        if action.type == GameActionType.noop or not keys:
+    def execute(
+        self,
+        action: GameAction,
+        *,
+        click_screen_offset: tuple[int, int] = (0, 0),
+    ) -> list[str]:
+        if action.type == GameActionType.noop:
             logger.info("executor noop: %s", action.model_dump())
-            return keys
+            return []
+
+        if action.type == GameActionType.click:
+            if not self.allow_click:
+                logger.warning("executor: click action ignored (allow_click=False)")
+                return []
+            if action.click_x is None or action.click_y is None:
+                raise ValueError("click requires click_x and click_y")
+            ox, oy = click_screen_offset
+            sx, sy = ox + action.click_x, oy + action.click_y
+            self._bump_and_check_cap()
+            if self.dry_run:
+                logger.info("executor dry_run would click screen (%s, %s) png-relative (%s, %s)", sx, sy, action.click_x, action.click_y)
+                return [f"click:{sx},{sy}"]
+            try:
+                import pyautogui
+            except ImportError as e:
+                raise RuntimeError(
+                    "pyautogui is not installed; keep dry_run=True or pip install pyautogui"
+                ) from e
+            pyautogui.click(sx, sy)
+            logger.info("executor clicked screen (%s, %s)", sx, sy)
+            return [f"click:{sx},{sy}"]
+
+        keys = self._keys_for_action(action)
+        if not keys:
+            logger.info("executor noop: %s", action.model_dump())
+            return []
 
         self._bump_and_check_cap()
 

@@ -4,7 +4,10 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from overwatch.search.indexer import SearchIndexer
 
 from overwatch.agents.compliance_brief import AGENT_COMPLIANCE_BRIEF_EVENT, run_compliance_brief_agent
 from overwatch.agents.incident_brief import AGENT_INCIDENT_BRIEF_EVENT, run_incident_brief_agent
@@ -65,7 +68,12 @@ def _clean_meta(meta: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in meta.items() if v is not None}
 
 
-async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOut) -> None:
+async def process_agent_run(
+    store: JobStore,
+    settings: Settings,
+    run: AgentRunOut,
+    indexer: SearchIndexer | None = None,
+) -> None:
     """Execute one claimed agent run (LLM + event + ``agent_runs`` row update)."""
     run_id = run.id
     orch_base = orchestration_fields(run.meta)
@@ -194,10 +202,32 @@ async def process_agent_run(store: JobStore, settings: Settings, run: AgentRunOu
         event_id=event_id,
         meta=fin_meta,
     )
+    if indexer is not None:
+        try:
+            agent_kind = _AGENT_PAYLOAD_ID.get(run.agent, run.agent.value)
+            await asyncio.to_thread(
+                indexer.index_agent_result,
+                run.job_id,
+                job.source_path,
+                agent_kind,
+                result_model.model_dump(),
+            )
+        except Exception:
+            logger.warning(
+                "Search index update failed for agent %s job %s",
+                run.agent.value,
+                run.job_id,
+                exc_info=True,
+            )
     await notify_agent_orchestration_terminal(store, run.job_id, run.meta, success=True)
 
 
-async def agent_worker_loop(store: JobStore, settings: Settings, stop: asyncio.Event) -> None:
+async def agent_worker_loop(
+    store: JobStore,
+    settings: Settings,
+    stop: asyncio.Event,
+    indexer: SearchIndexer | None = None,
+) -> None:
     """Poll for pending ``agent_runs`` rows and process them sequentially."""
     interval = settings.agent_worker_poll_interval_sec
     last_stale_sweep = 0.0
@@ -214,7 +244,7 @@ async def agent_worker_loop(store: JobStore, settings: Settings, stop: asyncio.E
                 await asyncio.sleep(interval)
                 continue
             try:
-                await process_agent_run(store, settings, run)
+                await process_agent_run(store, settings, run, indexer=indexer)
             except asyncio.CancelledError:
                 raise
             except Exception:

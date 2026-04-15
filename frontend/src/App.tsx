@@ -1,23 +1,35 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import SearchPanel, { JobSearchBadge } from "./SearchPanel";
 import type {
   AgentKind,
   AgentRunPublic,
+  AnomalyFrame,
   ComplianceBriefResult,
   IncidentBriefResult,
   IndustryPack,
   JobRecord,
+  Keyframe,
   LossPreventionResult,
+  OccupancyPoint,
   PerimeterChainResult,
   PrivacyReviewResult,
   RiskReviewResult,
+  SceneChange,
   SynthesisResult,
+  VisualAlert,
 } from "./api";
 import {
   createAgentRun,
   CROSS_INDUSTRY_AGENT_PIPELINE,
   DEFAULT_AGENT_PIPELINE,
+  deleteJob,
+  getAnomalies,
   getJob,
+  getKeyframes,
+  getOccupancy,
+  getSceneChanges,
   getSummary,
+  getVisualAlerts,
   INDUSTRY_PACK_OPTIONS,
   listJobAgentRuns,
   listJobs,
@@ -28,6 +40,198 @@ import {
   uploadVideo,
 } from "./api";
 import "./App.css";
+
+// ---------------------------------------------------------------------------
+// FrameAnalysisPanel — SigLIP visual analysis results for a completed job
+// ---------------------------------------------------------------------------
+
+const SEV_COLOR: Record<string, string> = {
+  high: "#dc2626",
+  medium: "#d97706",
+};
+
+function OccupancyBar({ score }: { score: number }) {
+  const pct = Math.round(score * 100);
+  const color = score > 0.7 ? "#dc2626" : score > 0.4 ? "#d97706" : "#16a34a";
+  return (
+    <div className="occ-bar-wrap" title={`Occupancy: ${pct}%`}>
+      <div className="occ-bar-fill" style={{ width: `${pct}%`, background: color }} />
+    </div>
+  );
+}
+
+function FrameAnalysisPanel({ jobId }: { jobId: string }) {
+  const [tab, setTab] = useState<"alerts" | "occupancy" | "keyframes" | "scenes" | "anomalies">("alerts");
+  const [alerts, setAlerts] = useState<VisualAlert[] | null>(null);
+  const [scenes, setScenes] = useState<SceneChange[] | null>(null);
+  const [occupancy, setOccupancy] = useState<OccupancyPoint[] | null>(null);
+  const [keyframes, setKeyframes] = useState<Keyframe[] | null>(null);
+  const [anomalies, setAnomalies] = useState<AnomalyFrame[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAlerts(null);
+    setScenes(null);
+    setOccupancy(null);
+    setKeyframes(null);
+    setAnomalies(null);
+    setErr(null);
+    setLoading(true);
+    Promise.all([
+      getVisualAlerts(jobId),
+      getSceneChanges(jobId),
+      getOccupancy(jobId),
+      getKeyframes(jobId),
+      getAnomalies(jobId),
+    ])
+      .then(([a, s, o, k, an]) => {
+        setAlerts(a.alerts);
+        setScenes(s.changes);
+        setOccupancy(o.timeline);
+        setKeyframes(k.keyframes);
+        setAnomalies(an.anomalies);
+      })
+      .catch((e) => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
+  }, [jobId]);
+
+  const TAB_LABELS: { id: typeof tab; label: string; badge?: number }[] = [
+    { id: "alerts",    label: "Visual Alerts",  badge: alerts?.length },
+    { id: "occupancy", label: "Occupancy" },
+    { id: "keyframes", label: "Keyframes",       badge: keyframes?.length },
+    { id: "scenes",    label: "Scene Changes",  badge: scenes?.length },
+    { id: "anomalies", label: "Anomalies",       badge: anomalies?.length },
+  ];
+
+  return (
+    <section className="card frame-analysis-panel">
+      <h3 className="frame-analysis-title">🎞 Frame Analysis <span className="muted small">(SigLIP-ViT)</span></h3>
+
+      <div className="frame-tab-bar">
+        {TAB_LABELS.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`frame-tab${tab === t.id ? " active" : ""}${t.badge ? " has-badge" : ""}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+            {t.badge != null && t.badge > 0 && (
+              <span className={`frame-tab-badge${t.id === "alerts" ? " badge-alert" : ""}`}>{t.badge}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {loading && <p className="muted small">Loading frame analysis…</p>}
+      {err && <p className="error small">{err}</p>}
+
+      {!loading && tab === "alerts" && (
+        <div className="frame-tab-content">
+          {!alerts?.length ? (
+            <p className="muted small">No visual alerts detected. Adjust <code>VISUAL_ALERT_THRESHOLD</code> or prompts to tune sensitivity.</p>
+          ) : (
+            <div className="frame-alerts-list">
+              {alerts.map((a, i) => (
+                <div key={i} className="frame-alert-row">
+                  <span
+                    className="frame-alert-badge"
+                    style={{ background: SEV_COLOR[a.severity ?? "medium"] ?? SEV_COLOR.medium }}
+                  >
+                    {a.severity ?? "medium"}
+                  </span>
+                  <span className="frame-ts">⏱ {a.ts_label}</span>
+                  <span className="frame-alert-prompt">{a.prompt}</span>
+                  <span className="frame-alert-score muted small">{(a.score * 100).toFixed(1)}%</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!loading && tab === "occupancy" && (
+        <div className="frame-tab-content">
+          {!occupancy?.length ? (
+            <p className="muted small">No occupancy data yet.</p>
+          ) : (
+            <>
+              <p className="muted small">Crowd density over time — green = empty, amber = moderate, red = crowded.</p>
+              <div className="occ-timeline">
+                {occupancy.map((pt, i) => (
+                  <div key={i} className="occ-tick" title={`${pt.ts_label} — ${Math.round(pt.occupancy_score * 100)}%`}>
+                    <OccupancyBar score={pt.occupancy_score} />
+                    {i % Math.max(1, Math.floor(occupancy.length / 8)) === 0 && (
+                      <span className="occ-ts-label">{pt.ts_label}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {!loading && tab === "keyframes" && (
+        <div className="frame-tab-content">
+          {!keyframes?.length ? (
+            <p className="muted small">No keyframes yet.</p>
+          ) : (
+            <>
+              <p className="muted small">Visually diverse representative moments — seek to these timestamps for a quick video summary.</p>
+              <div className="keyframes-grid">
+                {keyframes.map((kf, i) => (
+                  <div key={i} className="keyframe-card">
+                    <span className="keyframe-num">#{i + 1}</span>
+                    <span className="keyframe-ts">⏱ {kf.ts_label}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {!loading && tab === "scenes" && (
+        <div className="frame-tab-content">
+          {!scenes?.length ? (
+            <p className="muted small">No scene changes detected.</p>
+          ) : (
+            <div className="frame-alerts-list">
+              {scenes.map((sc, i) => (
+                <div key={i} className="frame-alert-row">
+                  <span className="frame-ts">⏱ {sc.ts_label}</span>
+                  <span className="muted small">cut · distance {(sc.distance * 100).toFixed(0)}%</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!loading && tab === "anomalies" && (
+        <div className="frame-tab-content">
+          {!anomalies?.length ? (
+            <p className="muted small">No anomalous frames detected.</p>
+          ) : (
+            <>
+              <p className="muted small">Frames visually unlike the rest of this video — may indicate unusual events.</p>
+              <div className="frame-alerts-list">
+                {anomalies.map((a, i) => (
+                  <div key={i} className="frame-alert-row">
+                    <span className="frame-ts">⏱ {a.ts_label}</span>
+                    <span className="muted small">anomaly score {(a.anomaly_score * 100).toFixed(0)}%</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -49,6 +253,9 @@ export default function App() {
   const [recentJobsError, setRecentJobsError] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [phase, setPhase] = useState<string>("");
+  const [searchScopeJobId, setSearchScopeJobId] = useState<string | null>(null);
+  const [deleteErr, setDeleteErr] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const refreshRecentJobs = useCallback(async () => {
     setRecentJobsError(null);
@@ -62,6 +269,29 @@ export default function App() {
       setRecentJobsLoading(false);
     }
   }, []);
+
+  const searchThisJob = useCallback((jobId: string) => {
+    setSearchScopeJobId(jobId);
+    setTimeout(() => {
+      document.getElementById("search-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  }, []);
+
+  const onDeleteJob = useCallback(async (jobId: string) => {
+    if (!confirm("Delete this job and all its data? This cannot be undone.")) return;
+    setDeleting(true);
+    setDeleteErr(null);
+    try {
+      await deleteJob(jobId);
+      setJob(null);
+      setSummary(null);
+      await refreshRecentJobs();
+    } catch (e) {
+      setDeleteErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
+    }
+  }, [refreshRecentJobs]);
 
   useEffect(() => {
     refreshRecentJobs();
@@ -218,9 +448,44 @@ export default function App() {
         {err ? <p className="error">{err}</p> : null}
       </section>
 
+      <SearchPanel
+        scopeJobId={searchScopeJobId}
+        onClearScope={() => setSearchScopeJobId(null)}
+        recentJobs={recentJobs}
+        onNavigateToJob={(jobId) => {
+          setSearchScopeJobId(null);
+          openJob(jobId);
+          setTimeout(() => {
+            document.getElementById("job-detail")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 80);
+        }}
+      />
+
       {job ? (
-        <section className="card">
-          <h2>Job</h2>
+        <section className="card" id="job-detail">
+          <div className="job-detail-header">
+            <h2>Job</h2>
+            <div className="job-detail-actions">
+              <button
+                type="button"
+                className="linkish small"
+                onClick={() => searchThisJob(job.id)}
+                title="Search within this video only"
+              >
+                Search this job
+              </button>
+              <button
+                type="button"
+                className="linkish small danger"
+                onClick={() => onDeleteJob(job.id)}
+                disabled={deleting}
+                title="Delete this job and all its data"
+              >
+                {deleting ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+          {deleteErr && <p className="error small">{deleteErr}</p>}
           <dl className="kv">
             <dt>ID</dt>
             <dd className="mono">{job.id}</dd>
@@ -235,8 +500,13 @@ export default function App() {
               </>
             ) : null}
           </dl>
+          {job.status === "completed" && (
+            <JobSearchBadge jobId={job.id} />
+          )}
         </section>
       ) : null}
+
+      {job?.status === "completed" && <FrameAnalysisPanel jobId={job.id} />}
 
       {job?.status === "completed" && !summary ? (
         <section className="card">

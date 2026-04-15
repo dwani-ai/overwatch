@@ -3,7 +3,8 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing_extensions import Self
 
 
 class FactorioState(BaseModel):
@@ -28,6 +29,7 @@ class GameActionType(str, Enum):
     skill = "skill"
     key = "key"
     keys = "keys"
+    click = "click"
     noop = "noop"
 
 
@@ -43,3 +45,24 @@ class GameAction(BaseModel):
 
     keys: list[str] | None = None
     """Sequence of key names when ``type`` is ``keys``."""
+
+    click_x: int | None = None
+    click_y: int | None = None
+    """Screen pixel coordinates on the captured monitor when ``type`` is ``click``."""
+
+    @model_validator(mode="after")
+    def _require_fields_for_type(self) -> Self:
+        if self.type == GameActionType.click:
+            if self.click_x is None or self.click_y is None:
+                raise ValueError("click action requires click_x and click_y")
+        return self
+
+
+class FactorioPlan(BaseModel):
+    """Planner output: one structured action plus optional reasoning (logged, not executed)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    schema_version: Literal["1"] = "1"
+    rationale: str | None = None
+    action: GameAction

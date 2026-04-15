@@ -401,3 +401,189 @@ export async function getPrivacyReview(jobId: string): Promise<AgentEventPayload
   if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
   return r.json();
 }
+
+// ---------------------------------------------------------------------------
+// Search / RAG
+// ---------------------------------------------------------------------------
+
+export type SearchSource = {
+  job_id: string;
+  source_path: string;
+  video_filename: string;
+  chunk_index: number | null;
+  start_pts_ms: number | null;
+  end_pts_ms: number | null;
+  agent_type: string;
+  content_type: string;
+  severity: string | null;
+};
+
+export type SearchResult = {
+  text: string;
+  score: number;
+  source: SearchSource;
+};
+
+export type SearchResponse = {
+  query: string;
+  answer: string | null;
+  results: SearchResult[];
+  total_found: number;
+};
+
+export type SearchIndexStatus = {
+  enabled: boolean;
+  total_documents: number;
+  collection_name: string;
+  embedding_model: string;
+  frame_search_enabled: boolean;
+  total_frames: number;
+  frame_embed_model: string;
+};
+
+export type SearchQuery = {
+  query: string;
+  limit?: number;
+  job_ids?: string[] | null;
+  agent_types?: string[] | null;
+  severity?: string | null;
+  synthesize_answer?: boolean;
+  include_frames?: boolean;
+};
+
+export async function searchEvents(q: SearchQuery): Promise<SearchResponse> {
+  const r = await apiFetch("/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(q),
+  });
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getSearchIndexStatus(): Promise<SearchIndexStatus> {
+  const r = await apiFetch("/search/index-status");
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export type JobSearchStatus = {
+  job_id: string;
+  indexed_doc_count: number;
+  search_enabled: boolean;
+  indexed_frame_count: number;
+  frame_search_enabled: boolean;
+};
+
+export async function getJobSearchStatus(jobId: string): Promise<JobSearchStatus> {
+  const r = await apiFetch(`/jobs/${jobId}/search-status`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function reindexJobSearch(
+  jobId: string,
+): Promise<{ job_id: string; events_reindexed: number; frames_indexed: number; status: string }> {
+  const r = await apiFetch(`/jobs/${jobId}/search-reindex`, { method: "POST" });
+  if (r.status !== 202) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function deleteJob(jobId: string): Promise<void> {
+  const r = await apiFetch(`/jobs/${jobId}`, { method: "DELETE" });
+  if (r.status !== 204) throw new Error(formatHttpError(r.status, await r.text()));
+}
+
+// ---------------------------------------------------------------------------
+// Frame Analysis (SigLIP features)
+// ---------------------------------------------------------------------------
+
+export type VisualAlert = {
+  event_id: number;
+  pts_ms: number | null;
+  severity: string | null;
+  prompt: string;
+  score: number;
+  ts_label: string;
+  frame_index: number;
+};
+
+export type SceneChange = {
+  pts_ms: number;
+  frame_index: number;
+  distance: number;
+  ts_label: string;
+};
+
+export type OccupancyPoint = {
+  pts_ms: number;
+  occupancy_score: number;
+  ts_label: string;
+};
+
+export type Keyframe = {
+  pts_ms: number;
+  frame_index: number;
+  ts_label: string;
+  sim_to_mean: number;
+};
+
+export type AnomalyFrame = {
+  pts_ms: number;
+  frame_index: number;
+  anomaly_score: number;
+  ts_label: string;
+};
+
+export async function getVisualAlerts(
+  jobId: string,
+): Promise<{ job_id: string; alerts: VisualAlert[]; count: number }> {
+  const r = await apiFetch(`/jobs/${jobId}/visual-alerts`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getSceneChanges(
+  jobId: string,
+): Promise<{ job_id: string; changes: SceneChange[]; count: number }> {
+  const r = await apiFetch(`/jobs/${jobId}/scene-changes`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getOccupancy(
+  jobId: string,
+): Promise<{ job_id: string; timeline: OccupancyPoint[] }> {
+  const r = await apiFetch(`/jobs/${jobId}/occupancy`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getKeyframes(
+  jobId: string,
+): Promise<{ job_id: string; keyframes: Keyframe[] }> {
+  const r = await apiFetch(`/jobs/${jobId}/keyframes`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getAnomalies(
+  jobId: string,
+): Promise<{ job_id: string; anomalies: AnomalyFrame[]; count: number }> {
+  const r = await apiFetch(`/jobs/${jobId}/anomalies`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function searchByImage(
+  imageFile: File,
+  opts?: { limit?: number; jobIds?: string[] },
+): Promise<SearchResponse> {
+  const fd = new FormData();
+  fd.append("image", imageFile);
+  let url = `/search/by-image?limit=${opts?.limit ?? 10}`;
+  if (opts?.jobIds?.length) url += `&job_ids=${opts.jobIds.join(",")}`;
+  const r = await apiFetch(url, { method: "POST", body: fd });
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}

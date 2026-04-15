@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from overwatch.analysis.chunk_pipeline import job_summary_from_chunks, run_structured_chunk_analysis
 from overwatch.config import Settings
@@ -17,6 +18,10 @@ from overwatch.models import (
 from overwatch.store import JobStore
 from overwatch.video import extract_segment_mp4, ffprobe, plan_chunks
 from overwatch.vllm_client import chat_completion, extract_assistant_text, fetch_models
+
+if TYPE_CHECKING:
+    from overwatch.search.frame_indexer import FrameIndexer
+    from overwatch.search.indexer import SearchIndexer
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +76,100 @@ async def _extract_chunk_mp4(
     )
 
 
-async def process_one_job(store: JobStore, settings: Settings) -> bool:
+async def _index_frames_background(
+    frame_indexer: FrameIndexer,
+    store: JobStore,
+    job_id: str,
+    source_path: str,
+    settings: Settings,
+) -> None:
+    try:
+        result = await asyncio.to_thread(
+            frame_indexer.index_video_frames,
+            job_id,
+            source_path,
+            settings.frame_sample_fps,
+            settings.frame_max_frames_per_job,
+        )
+        await _store_frame_analysis_events(store, job_id, result)
+        logger.info(
+            "Frame index: %d frames, %d alerts, %d cuts, %d anomalies for job %s",
+            result.get("frame_count", 0),
+            len(result.get("visual_alerts", [])),
+            len(result.get("scene_changes", [])),
+            len(result.get("anomalies", [])),
+            job_id,
+        )
+    except Exception:
+        logger.exception("Frame indexing failed for job %s", job_id)
+
+
+async def _store_frame_analysis_events(
+    store: JobStore,
+    job_id: str,
+    result: dict,
+) -> None:
+    """Persist frame analysis results as job events in SQLite."""
+    # Visual alerts — one event per alert (surfaced prominently)
+    for alert in result.get("visual_alerts", []):
+        score = alert.get("score", 0.0)
+        severity = "high" if score >= 0.35 else "medium"
+        await store.append_event(
+            job_id,
+            agent=AgentTrack.pipeline,
+            event_type="visual_alert",
+            pts_ms=alert.get("pts_ms"),
+            payload=alert,
+            severity=severity,
+        )
+
+    # Scene changes — single event with full list
+    scene_changes = result.get("scene_changes", [])
+    if scene_changes:
+        await store.append_event(
+            job_id,
+            agent=AgentTrack.pipeline,
+            event_type="scene_changes",
+            payload={"changes": scene_changes, "count": len(scene_changes)},
+        )
+
+    # Occupancy timeline — single event
+    occupancy = result.get("occupancy_timeline", [])
+    if occupancy:
+        await store.append_event(
+            job_id,
+            agent=AgentTrack.pipeline,
+            event_type="frame_occupancy",
+            payload={"timeline": occupancy},
+        )
+
+    # Diversity keyframes — single event
+    keyframes = result.get("keyframes", [])
+    if keyframes:
+        await store.append_event(
+            job_id,
+            agent=AgentTrack.pipeline,
+            event_type="frame_keyframes",
+            payload={"keyframes": keyframes},
+        )
+
+    # Anomalies — single event with list
+    anomalies = result.get("anomalies", [])
+    if anomalies:
+        await store.append_event(
+            job_id,
+            agent=AgentTrack.pipeline,
+            event_type="frame_anomalies",
+            payload={"anomalies": anomalies, "count": len(anomalies)},
+        )
+
+
+async def process_one_job(
+    store: JobStore,
+    settings: Settings,
+    indexer: SearchIndexer | None = None,
+    frame_indexer: FrameIndexer | None = None,
+) -> bool:
     job = await store.next_pending_job()
     if job is None:
         return False
@@ -198,6 +296,20 @@ async def process_one_job(store: JobStore, settings: Settings) -> bool:
                             pts_ms=ch.start_pts_ms,
                             payload=analysis,
                         )
+                        if indexer is not None:
+                            try:
+                                await asyncio.to_thread(
+                                    indexer.index_chunk_analysis,
+                                    job.id,
+                                    job.source_path,
+                                    analysis,
+                                )
+                            except Exception:
+                                logger.warning(
+                                    "Search index update failed for chunk %s",
+                                    ch.chunk_index,
+                                    exc_info=True,
+                                )
                     except Exception as e:
                         logger.exception("Chunk %s analysis failed", ch.chunk_index)
                         await store.append_event(
@@ -222,6 +334,13 @@ async def process_one_job(store: JobStore, settings: Settings) -> bool:
         await store.update_job_status(job.id, JobStatus.completed)
         if fp:
             await store.record_processed_file(job.source_path, str(fp), job.id)
+
+        # Fire-and-forget frame embedding + analysis after job completes
+        if frame_indexer is not None:
+            asyncio.create_task(
+                _index_frames_background(frame_indexer, store, job.id, str(path), settings)
+            )
+
         return True
 
     except Exception as e:
@@ -237,8 +356,16 @@ async def process_one_job(store: JobStore, settings: Settings) -> bool:
         return True
 
 
-async def worker_loop(store: JobStore, settings: Settings, stop: asyncio.Event) -> None:
+async def worker_loop(
+    store: JobStore,
+    settings: Settings,
+    stop: asyncio.Event,
+    indexer: SearchIndexer | None = None,
+    frame_indexer: FrameIndexer | None = None,
+) -> None:
     while not stop.is_set():
-        worked = await process_one_job(store, settings)
+        worked = await process_one_job(
+            store, settings, indexer=indexer, frame_indexer=frame_indexer
+        )
         if not worked:
             await asyncio.sleep(settings.worker_poll_interval_sec)

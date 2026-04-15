@@ -46,10 +46,12 @@ services:
     # API is reached from the host only via overwatch-ui (nginx) on port 80 — /v1/, /api/, /docs, etc.
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/v1/health"]
-      interval: 10s
+      interval: 15s
       timeout: 5s
-      retries: 6
-      start_period: 90s
+      retries: 12
+      # Extended for first-run SigLIP model download (~400 MB from HuggingFace).
+      # Subsequent restarts are fast because the model is cached on the volume.
+      start_period: 300s
     environment:
       - DATA_DIR=/data/overwatch
       - INGEST_DIR=/data/ingest
@@ -78,6 +80,9 @@ services:
     volumes:
       - ./data/ingest:/data/ingest
       - ./data/overwatch:/data/overwatch
+      # Cache HuggingFace models (SigLIP ~400 MB, bge-small ~130 MB) so they
+      # survive container rebuilds and are not re-downloaded on every deploy.
+      - hf-cache:/root/.cache/huggingface
     restart: unless-stopped
 
   overwatch-ui:
@@ -91,3 +96,8 @@ services:
       overwatch-api:
         condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  # Named volume so HuggingFace model weights persist across docker compose up --build.
+  # Location on host: docker volume inspect overwatch_hf-cache
+  hf-cache:

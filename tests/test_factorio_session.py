@@ -22,6 +22,19 @@ class TestFactorioSession(unittest.TestCase):
                 self.assertEqual((root / rec.rel_path).read_bytes(), png)
                 rows = store.list_frames(sid)
                 self.assertEqual(len(rows), 1)
+                self.assertTrue(store.has_session(sid))
+                store.append_agent_step(
+                    sid,
+                    0,
+                    frame_rel_path=rec.rel_path,
+                    state_json='{"schema_version":"1","confidence":0.5}',
+                    action_json='{"type":"noop"}',
+                    planner_raw_text="t",
+                    error=None,
+                )
+                asteps = store.list_agent_steps(sid)
+                self.assertEqual(len(asteps), 1)
+                self.assertEqual(asteps[0].action_json, '{"type":"noop"}')
             finally:
                 store.close()
 

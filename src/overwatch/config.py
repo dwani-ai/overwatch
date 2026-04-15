@@ -55,6 +55,120 @@ class Settings(BaseSettings):
     factorio_root: Optional[Path] = Field(default=None)
     factorio_max_actions_per_minute: int = Field(default=30, ge=1, le=600)
     factorio_capture_interval_sec: float = Field(default=2.0, ge=0.2, le=120.0)
+    factorio_settle_sec: float = Field(default=1.0, ge=0.0, le=120.0)
+    factorio_confidence_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
+    factorio_tech_tree_path: Optional[Path] = Field(default=None)
+
+    # Search / RAG (requires chromadb, sentence-transformers, rank-bm25 installed)
+    search_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable hybrid RAG search over video analysis results. "
+            "Set SEARCH_ENABLED=false to disable if search packages are not installed."
+        ),
+    )
+    search_embedding_model: str = Field(
+        default="BAAI/bge-small-en-v1.5",
+        description="Sentence-transformers model name for search embeddings.",
+    )
+    search_backfill_limit: int = Field(
+        default=200,
+        ge=0,
+        le=5000,
+        description="Max number of existing completed jobs to back-fill into the search index on startup.",
+    )
+    search_answer_enabled: bool = Field(
+        default=True,
+        description="Allow search queries to request LLM-synthesized answers (synthesize_answer=true).",
+    )
+
+    # Frame-level SigLIP embedding search (requires Pillow + transformers)
+    frame_search_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable cross-modal text-to-frame search using SigLIP-ViT embeddings. "
+            "Requires SEARCH_ENABLED=true.  Set to false to disable frame indexing."
+        ),
+    )
+    frame_embed_model: str = Field(
+        default="google/siglip-base-patch16-224",
+        description="HuggingFace model ID for SigLIP frame embeddings.",
+    )
+    frame_sample_fps: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=5.0,
+        description="Frames per second to sample from each video for frame indexing.",
+    )
+    frame_max_frames_per_job: int = Field(
+        default=500,
+        ge=10,
+        le=5000,
+        description="Maximum number of frames to index per job.",
+    )
+
+    # --- SigLIP analysis features ---
+
+    # Feature 1: Zero-shot visual alerting
+    visual_alert_enabled: bool = Field(
+        default=True,
+        description="Run configurable text prompts against every frame; emit visual_alert events.",
+    )
+    visual_alert_prompts: str = Field(
+        default=(
+            "person lying on the ground,"
+            "fire or smoke visible,"
+            "person climbing over a fence or barrier,"
+            "crowd blocking an emergency exit,"
+            "forklift operating near a pedestrian,"
+            "unattended bag or package near a doorway"
+        ),
+        description="Comma-separated list of zero-shot alert prompts matched against every frame.",
+    )
+    visual_alert_threshold: float = Field(
+        default=0.20,
+        ge=0.05,
+        le=0.95,
+        description="Minimum SigLIP cosine similarity for a frame to trigger a visual alert.",
+    )
+
+    # Feature 2: Scene change detection
+    scene_change_enabled: bool = Field(
+        default=True,
+        description="Detect scene cuts by cosine distance between consecutive frame embeddings.",
+    )
+    scene_change_threshold: float = Field(
+        default=0.25,
+        ge=0.05,
+        le=0.95,
+        description="Cosine distance threshold above which a scene change is flagged.",
+    )
+
+    # Feature 3: Occupancy density scoring
+    occupancy_scoring_enabled: bool = Field(
+        default=True,
+        description="Score every frame on an empty↔crowded axis using SigLIP probe prompts.",
+    )
+
+    # Feature 5: Visual diversity keyframes
+    frame_keyframe_count: int = Field(
+        default=8,
+        ge=2,
+        le=30,
+        description="Number of visually diverse representative keyframes to select per job.",
+    )
+
+    # Feature 6: Baseline anomaly detection
+    anomaly_detection_enabled: bool = Field(
+        default=True,
+        description="Flag frames whose embedding is far from the per-job centroid.",
+    )
+    anomaly_threshold: float = Field(
+        default=0.30,
+        ge=0.05,
+        le=0.95,
+        description="Cosine distance from job centroid above which a frame is flagged as anomalous.",
+    )
 
     # Comma-separated origins for browser UI (http://localhost omits :80; include :3000 if you remap the UI port)
     cors_origins: str = Field(

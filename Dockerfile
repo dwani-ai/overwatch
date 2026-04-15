@@ -6,6 +6,13 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# Install CPU-only PyTorch first (~200 MB vs 530 MB for the CUDA wheel).
+# sentence-transformers and transformers will reuse this install.
+# To use a GPU build instead, remove this RUN step and let pip resolve automatically.
+RUN pip install --no-cache-dir \
+    torch \
+    --extra-index-url https://download.pytorch.org/whl/cpu
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

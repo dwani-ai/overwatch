@@ -37,6 +37,21 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_factorio_frames_session
             ON factorio_frames(session_id);
+        CREATE TABLE IF NOT EXISTS factorio_agent_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            step_index INTEGER NOT NULL,
+            frame_rel_path TEXT,
+            state_json TEXT,
+            action_json TEXT NOT NULL,
+            planner_raw_text TEXT,
+            error TEXT,
+            observed_at REAL NOT NULL,
+            UNIQUE(session_id, step_index),
+            FOREIGN KEY(session_id) REFERENCES factorio_sessions(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_factorio_agent_steps_session
+            ON factorio_agent_steps(session_id);
         """
     )
     conn.commit()
@@ -49,6 +64,18 @@ class FrameRecord:
     rel_path: str
     observed_at: float
     bytes_len: int
+
+
+@dataclass
+class AgentStepRecord:
+    session_id: str
+    step_index: int
+    frame_rel_path: str | None
+    state_json: str | None
+    action_json: str
+    planner_raw_text: str | None
+    error: str | None
+    observed_at: float
 
 
 class FactorioSessionStore:
@@ -65,6 +92,13 @@ class FactorioSessionStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    def has_session(self, session_id: str) -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM factorio_sessions WHERE id = ? LIMIT 1",
+            (session_id,),
+        )
+        return cur.fetchone() is not None
 
     def create_session(self, *, meta: dict[str, Any] | None = None) -> str:
         sid = str(uuid.uuid4())
@@ -110,3 +144,59 @@ class FactorioSessionStore:
 
     def frame_path(self, record: FrameRecord) -> Path:
         return self.root / record.rel_path
+
+    def append_agent_step(
+        self,
+        session_id: str,
+        step_index: int,
+        *,
+        frame_rel_path: str | None,
+        state_json: str | None,
+        action_json: str,
+        planner_raw_text: str | None,
+        error: str | None = None,
+    ) -> None:
+        now = time.time()
+        self._conn.execute(
+            """
+            INSERT INTO factorio_agent_steps (
+                session_id, step_index, frame_rel_path, state_json, action_json,
+                planner_raw_text, error, observed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                step_index,
+                frame_rel_path,
+                state_json,
+                action_json,
+                planner_raw_text,
+                error,
+                now,
+            ),
+        )
+        self._conn.commit()
+
+    def list_agent_steps(self, session_id: str) -> list[AgentStepRecord]:
+        cur = self._conn.execute(
+            """
+            SELECT session_id, step_index, frame_rel_path, state_json, action_json,
+                   planner_raw_text, error, observed_at
+            FROM factorio_agent_steps WHERE session_id = ? ORDER BY step_index
+            """,
+            (session_id,),
+        )
+        rows = cur.fetchall()
+        return [
+            AgentStepRecord(
+                r[0],
+                int(r[1]),
+                r[2],
+                r[3],
+                r[4],
+                r[5],
+                r[6],
+                float(r[7]),
+            )
+            for r in rows
+        ]
