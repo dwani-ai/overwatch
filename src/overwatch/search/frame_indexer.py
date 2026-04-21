@@ -124,7 +124,12 @@ class FrameIndexer:
 
         logger.info("Loading SigLIP %s on %s …", self._model_name, self._device)
         self._processor = AutoProcessor.from_pretrained(self._model_name)
+        logger.info(
+            "SigLIP processor ready; loading model weights (first run: large HF download, "
+            "often several minutes with little or no log output)…"
+        )
         self._model = AutoModel.from_pretrained(self._model_name)
+        logger.info("SigLIP model weights loaded; moving to %s", self._device)
         self._model.eval()
         self._model = self._model.to(self._device)
 

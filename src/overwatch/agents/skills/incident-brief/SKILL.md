@@ -1,5 +1,5 @@
 ---
-name: incident-brief
+name: incident_brief
 description: Incident-style handoff brief from structured per-chunk scene, events, security, and logistics JSON.
 ---
 

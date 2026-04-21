@@ -1,3 +1,8 @@
+# llama.cpp OpenAI-compatible server (Gemma4 GGUF). Use with Overwatch:
+#   docker compose -f compose.yml -f llama-cpp.yml up -d
+# Set VLLM_BASE_URL=http://overwatch-vlm:9000/v1 (not localhost — the API runs in another container).
+# OpenAI-compatible base URL must include /v1 (same as VLLM_BASE_URL for vLLM).
+
 services:
   overwatch-vlm:
     image: ghcr.io/ggml-org/llama.cpp:server-cuda

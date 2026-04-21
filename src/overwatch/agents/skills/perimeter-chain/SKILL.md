@@ -1,5 +1,5 @@
 ---
-name: perimeter-chain
+name: perimeter_chain
 description: Time-ordered perimeter, access, and boundary-relevant chain from structured CCTV-style JSON summaries.
 ---
 

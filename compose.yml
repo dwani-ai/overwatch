@@ -1,3 +1,12 @@
+# Run Overwatch + llama.cpp on one Docker network (recommended for local Gemma):
+#   docker compose -f compose.yml -f llama-cpp.yml up -d
+# Then set VLLM_BASE_URL=http://overwatch-vlm:9000/v1 (service name from llama-cpp.yml).
+#
+# If the API container uses VLLM_BASE_URL=http://localhost:9000/ it will fail: localhost
+# inside overwatch-api is the API container, not the host. Use host.docker.internal instead
+# when the LLM is published on the host (e.g. llama-cpp on port 9000), or join the compose
+# network as above.
+
 services:
   # Optional local GPU vLLM. Default stack uses hosted API (see overwatch-api VLLM_BASE_URL).
   vllm-server:
@@ -43,6 +52,10 @@ services:
   overwatch-api:
     build: .
     container_name: overwatch-api
+    # Lets the container reach services on the Docker host (e.g. llama-cpp bound to 0.0.0.0:9000).
+    # Use VLLM_BASE_URL=http://host.docker.internal:9000/v1 when not using the same compose network.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # API is reached from the host only via overwatch-ui (nginx) on port 80 — /v1/, /api/, /docs, etc.
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/v1/health"]
@@ -53,6 +66,8 @@ services:
       # Subsequent restarts are fast because the model is cached on the volume.
       start_period: 300s
     environment:
+      # Pin Hugging Face cache to the named volume below (BGE + SigLIP both use hub under HF_HOME).
+      - HF_HOME=/root/.cache/huggingface
       - DATA_DIR=/data/overwatch
       - INGEST_DIR=/data/ingest
       - VLLM_BASE_URL=${VLLM_BASE_URL}
@@ -80,8 +95,9 @@ services:
     volumes:
       - ./data/ingest:/data/ingest
       - ./data/overwatch:/data/overwatch
-      # Cache HuggingFace models (SigLIP ~400 MB, bge-small ~130 MB) so they
-      # survive container rebuilds and are not re-downloaded on every deploy.
+      # Cache HuggingFace Hub weights (SigLIP ~400 MB, bge-small ~130 MB). Re-download happens if
+      # this volume is empty (first run), removed (`docker compose down -v`), or you run the API
+      # without this mount. `docker compose build` alone does not clear named volumes.
       - hf-cache:/root/.cache/huggingface
     restart: unless-stopped
 
