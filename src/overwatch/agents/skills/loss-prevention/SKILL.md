@@ -1,5 +1,5 @@
 ---
-name: loss_prevention
+name: loss-prevention
 description: Loss-prevention narrative and behavioural observations from retail and supply-chain style structured summaries.
 ---
 

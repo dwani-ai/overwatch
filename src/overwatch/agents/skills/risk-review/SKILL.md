@@ -1,5 +1,5 @@
 ---
-name: risk_review
+name: risk-review
 description: Safety and security risk triage from aggregated chunk-level CCTV and warehouse analysis JSON.
 ---
 

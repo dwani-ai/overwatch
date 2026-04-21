@@ -1,5 +1,5 @@
 ---
-name: privacy_review
+name: privacy-review
 description: Privacy and re-identification risk review for structured video analytics JSON (scenes, events, counts).
 ---
 

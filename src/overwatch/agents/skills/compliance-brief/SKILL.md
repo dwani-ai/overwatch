@@ -1,5 +1,5 @@
 ---
-name: compliance_brief
+name: compliance-brief
 description: Cross-industry operations compliance read from chunk-level scene, security, logistics, and attendance JSON.
 ---
 

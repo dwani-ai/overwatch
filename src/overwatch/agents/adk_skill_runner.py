@@ -209,8 +209,20 @@ def _litellm_openai_env(base_url: str, api_key: str | None) -> Iterator[None]:
             os.environ["OPENAI_API_KEY"] = prev_key
 
 
+# ADK requires SKILL.md ``name`` to be kebab-case and the *directory name* must match exactly.
+_AGENT_SKILL_SUBDIR: dict[AgentKind, str] = {
+    AgentKind.synthesis: "synthesis",
+    AgentKind.risk_review: "risk-review",
+    AgentKind.incident_brief: "incident-brief",
+    AgentKind.compliance_brief: "compliance-brief",
+    AgentKind.loss_prevention: "loss-prevention",
+    AgentKind.perimeter_chain: "perimeter-chain",
+    AgentKind.privacy_review: "privacy-review",
+}
+
+
 def _skill_dir(kind: AgentKind) -> Path:
-    return _SKILL_ROOT / kind.value
+    return _SKILL_ROOT / _AGENT_SKILL_SUBDIR[kind]
 
 
 async def _run_llm_agent_once(
