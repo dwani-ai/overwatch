@@ -39,7 +39,9 @@ Mandatory workflow:
 3. Apply those instructions to the job summary. Use load_skill_resource only if the skill tells you to load a reference file.
 4. Your final assistant message must be ONLY one JSON object matching the schema in the user message. No markdown fences, no commentary.
 
-Global rules: Ground answers only in the provided JSON. Do not invent facts. Do not output personal identities."""
+Global rules: Ground answers only in the provided JSON. Do not invent facts. Do not output personal identities.
+
+JSON content rules: Every string and array element must be real prose or real short items inferred from the job summary. Never output angle-bracket placeholders (e.g. literal "<bullet>" or "<2-6 sentences>") as values — those confuse small models; write real words for this job. The multiline JSON shape below is required: large models should follow it exactly; small models should fill the same keys with grounded text."""
 
 _AGENT_TEMPERATURE: dict[AgentKind, float] = {
     AgentKind.synthesis: 0.2,
@@ -72,100 +74,142 @@ _PARSE_ERROR_LABEL: dict[AgentKind, str] = {
 }
 
 _USER_BODY: dict[AgentKind, str] = {
-    AgentKind.synthesis: """Input job summary (JSON). It may be truncated if very large; call that out mentally and stay conservative.
+    AgentKind.synthesis: """Input job summary (JSON). It may be truncated if very large; stay conservative.
 
 {payload}
 
-Required JSON shape (all keys required; use empty strings or empty arrays if nothing applies):
+Return exactly one JSON object, no markdown. All keys below are required. Use empty strings or empty arrays only when the summary truly has nothing for that field.
+
+Field semantics: executive_summary = 2–5 sentences; key_observations / security_highlights / logistics_highlights / recommended_actions = short bullet phrases; attendance_summary = one short paragraph (counts only, no identities).
+
+The skeleton uses empty strings and [] to show shape — replace them with real content from the job summary (never angle-bracket placeholders like <bullet>).
+
+Required JSON shape:
 {{
   "schema_version": "1",
-  "executive_summary": "<2-5 sentences>",
-  "key_observations": ["<bullet>", "..."],
-  "security_highlights": ["<bullet>", "..."],
-  "logistics_highlights": ["<bullet>", "..."],
-  "attendance_summary": "<short paragraph; counts only>",
-  "recommended_actions": ["<action>", "..."]
+  "executive_summary": "",
+  "key_observations": [],
+  "security_highlights": [],
+  "logistics_highlights": [],
+  "attendance_summary": "",
+  "recommended_actions": []
 }}
 """,
     AgentKind.risk_review: """Job summary (JSON). It may be truncated if very large; stay conservative.
 
 {payload}
 
-Required JSON shape (all keys required):
+Return exactly one JSON object, no markdown. All keys below are required.
+
+Enums: overall_risk must be exactly one of: low, medium, high, unknown. requires_immediate_review must be true or false (JSON booleans). risk_factors and mitigations_suggested = arrays of short strings. operator_notes = 2–4 sentences.
+
+Replace the skeleton values with real content from the job summary (never angle-bracket placeholders).
+
+Required JSON shape:
 {{
   "schema_version": "1",
-  "overall_risk": "low" | "medium" | "high" | "unknown",
-  "requires_immediate_review": <true|false>,
-  "risk_factors": ["<short bullet>", "..."],
-  "operator_notes": "<2-4 sentences>",
-  "mitigations_suggested": ["<action>", "..."]
+  "overall_risk": "unknown",
+  "requires_immediate_review": false,
+  "risk_factors": [],
+  "operator_notes": "",
+  "mitigations_suggested": []
 }}
 """,
     AgentKind.incident_brief: """Job summary (JSON). It may be truncated if very large; stay conservative.
 
 {payload}
 
-Required JSON shape (all keys required):
+Return exactly one JSON object, no markdown. All keys below are required.
+
+Field semantics: narrative = incident-style paragraph (several sentences); key_moments, situational_factors, suggested_followups = arrays of short strings.
+
+Replace the skeleton with real content from the job summary (never angle-bracket placeholders like <2-6 sentences> or <bullet>).
+
+Required JSON shape:
 {{
   "schema_version": "1",
-  "narrative": "<2-6 sentences>",
-  "key_moments": ["<bullet>", "..."],
-  "situational_factors": ["<bullet>", "..."],
-  "suggested_followups": ["<action>", "..."]
+  "narrative": "",
+  "key_moments": [],
+  "situational_factors": [],
+  "suggested_followups": []
 }}
 """,
     AgentKind.compliance_brief: """Job summary (JSON). May be truncated; stay conservative.
 
 {payload}
 
-Required JSON shape (all keys required):
+Return exactly one JSON object, no markdown. All keys below are required.
+
+Enums: overall_alignment must be exactly one of: aligned, partial, unclear, concerns. observed_practices, gaps_or_concerns, recommended_verifications = arrays of strings. notes = short paragraph.
+
+Replace the skeleton with real content from the job summary (never angle-bracket placeholders).
+
+Required JSON shape:
 {{
   "schema_version": "1",
-  "overall_alignment": "aligned" | "partial" | "unclear" | "concerns",
-  "observed_practices": ["<bullet>", "..."],
-  "gaps_or_concerns": ["<bullet>", "..."],
-  "recommended_verifications": ["<bullet>", "..."],
-  "notes": "<short paragraph>"
+  "overall_alignment": "unclear",
+  "observed_practices": [],
+  "gaps_or_concerns": [],
+  "recommended_verifications": [],
+  "notes": ""
 }}
 """,
     AgentKind.loss_prevention: """Job summary (JSON). May be truncated; stay conservative.
 
 {payload}
 
-Required JSON shape (all keys required):
+Return exactly one JSON object, no markdown. All keys below are required.
+
+Enums: risk_level must be exactly one of: low, medium, high, unknown. narrative = LP-style prose (no names/IDs). behavioral_observations and suggested_actions = arrays of short strings.
+
+Replace the skeleton with real content from the job summary (never angle-bracket placeholders).
+
+Required JSON shape:
 {{
   "schema_version": "1",
-  "narrative": "<2-6 sentences, LP style>",
-  "behavioral_observations": ["<bullet>", "..."],
-  "risk_level": "low" | "medium" | "high" | "unknown",
-  "suggested_actions": ["<bullet>", "..."]
+  "narrative": "",
+  "behavioral_observations": [],
+  "risk_level": "unknown",
+  "suggested_actions": []
 }}
 """,
     AgentKind.perimeter_chain: """Job summary (JSON). May be truncated; stay conservative.
 
 {payload}
 
-Required JSON shape (all keys required):
+Return exactly one JSON object, no markdown. All keys below are required.
+
+Field semantics: chain_narrative = time-ordered story (several sentences); key_events, zones_or_segments, follow_up_checks = arrays of short strings (zones only if supported by the text).
+
+Replace the skeleton with real content from the job summary (never angle-bracket placeholders).
+
+Required JSON shape:
 {{
   "schema_version": "1",
-  "chain_narrative": "<ordered story, 2-7 sentences>",
-  "key_events": ["<bullet>", "..."],
-  "zones_or_segments": ["<area label from text>", "..."],
-  "follow_up_checks": ["<bullet>", "..."]
+  "chain_narrative": "",
+  "key_events": [],
+  "zones_or_segments": [],
+  "follow_up_checks": []
 }}
 """,
     AgentKind.privacy_review: """Job summary (JSON). May be truncated; note truncation in your assessment if relevant.
 
 {payload}
 
-Required JSON shape (all keys required):
+Return exactly one JSON object, no markdown. All keys below are required.
+
+Enums: overall_privacy_risk must be exactly one of: low, medium, high, unknown. identity_inference_risks, sensitive_descriptors, safe_output_guidance = arrays of strings. summary = 2–4 sentences.
+
+Replace the skeleton with real content from the job summary (never angle-bracket placeholders).
+
+Required JSON shape:
 {{
   "schema_version": "1",
-  "overall_privacy_risk": "low" | "medium" | "high" | "unknown",
-  "identity_inference_risks": ["<bullet>", "..."],
-  "sensitive_descriptors": ["<bullet>", "..."],
-  "safe_output_guidance": ["<bullet>", "..."],
-  "summary": "<2-4 sentences>"
+  "overall_privacy_risk": "unknown",
+  "identity_inference_risks": [],
+  "sensitive_descriptors": [],
+  "safe_output_guidance": [],
+  "summary": ""
 }}
 """,
 }
