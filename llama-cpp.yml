@@ -4,7 +4,7 @@ services:
     container_name: overwatch-vlm
     restart: unless-stopped
     ports:
-      - "8000:8080"
+      - "9000:9000"
     volumes:
       - ./models:/models:ro
     deploy:
@@ -20,13 +20,13 @@ services:
       --model /models/gemma4-e2b/gemma-4-E2B-it-Q4_K_M.gguf
       --mmproj /models/gemma4-e2b/mmproj-BF16.gguf
       --host 0.0.0.0
-      --port 8080
+      --port 9000
       --ctx-size 32768
       --n-gpu-layers 99
       --jinja
       --alias gemma4
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
       interval: 30s
       timeout: 10s
       retries: 5
