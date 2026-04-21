@@ -6,38 +6,85 @@ This document describes the runtime components, data flow, and how the LLM/VLM b
 
 ## Architecture diagram
 
+High-level view: browser → edge → API container → storage, search, and an OpenAI-compatible LLM (vLLM or llama.cpp).
+
 ```mermaid
-flowchart LR
-  subgraph Browser["User browser"]
-    UI["Overwatch UI (React)"]
+flowchart TB
+  subgraph clients [Clients]
+    Browser["Browser"]
   end
 
-  subgraph Compose["Docker Compose network"]
-    NGINX["overwatch-ui (nginx)\n:80"]
-    API["overwatch-api (FastAPI)\n:8080"]
-    DB["SQLite + artifacts\n./data/overwatch"]
-    ING["Ingest dir\n./data/ingest"]
-    HC["HuggingFace cache\nhf-cache volume"]
+  subgraph edge [Edge]
+    Nginx["overwatch-ui\nnginx :80"]
+    React["Static UI bundle"]
   end
 
-  subgraph Backends["OpenAI-compatible backend (choose one)"]
-    VLLM["External vLLM\n/video_url multimodal"]
-    LLCP["Local llama.cpp server\n(image_url multimodal)\n(overwatch-vlm :9000)"]
+  subgraph api [overwatch-api container]
+    Http["FastAPI\n/v1 /api /docs"]
+    subgraph loops [Asyncio background tasks]
+      JobW["Job worker\nchunks + specialists"]
+      AgW["Agent worker\njob-level agents"]
+      IngL["Folder ingest"]
+      FiBg["Frame index tasks"]
+    end
+    subgraph pipelines [Pipeline and ML]
+      ChunkP["Chunk pipeline\nobserve + specialists\nhttpx to LLM"]
+      Adk["ADK job agents\nLlmAgent + SkillToolset\nSKILL.md + LiteLLM"]
+      TxtS["SearchIndexer\nBGE + Chroma + BM25"]
+      FrmS["FrameIndexer\nSigLIP + Chroma"]
+    end
+    JobW --> ChunkP
+    AgW --> Adk
+    JobW --> TxtS
+    JobW --> FrmS
+    FiBg --> FrmS
   end
 
-  UI -->|HTTP| NGINX
-  NGINX -->|reverse-proxy /v1/* /api/*| API
+  subgraph data [Persistent data]
+    Sql[("SQLite\njobs events agent_runs")]
+    Chroma[("ChromaDB\noverwatch_events\noverwatch_frames")]
+    IngestDir["/data/ingest\nvideo drop"]
+    HfVol["hf-cache volume\nHuggingFace weights"]
+  end
 
-  API <--> DB
-  API <--> ING
-  API <--> HC
+  subgraph llm [OpenAI-compatible backend pick one]
+    Vllm["External vLLM\nvideo_url multimodal"]
+    Llama["llama.cpp server\noverwatch-vlm :9000\nimage_url frames"]
+  end
 
-  API -->|POST /v1/chat/completions\nobserve (multimodal)| Backends
-  API -->|POST /v1/chat/completions\nspecialists + agents (text)| Backends
+  Browser --> Nginx
+  Nginx --> React
+  Nginx -->|"reverse proxy\n/v1 /api"| Http
+  Http --> Sql
 
-  Backends --> VLLM
-  Backends --> LLCP
+  JobW --> Sql
+  AgW --> Sql
+  IngL --> IngestDir
+  ChunkP --> Sql
+  TxtS --> Sql
+  FrmS --> Sql
+  TxtS --> Chroma
+  FrmS --> Chroma
+  ChunkP --> HfVol
+  TxtS --> HfVol
+  FrmS --> HfVol
+
+  ChunkP -->|"chat completions"| Vllm
+  ChunkP -->|"chat completions"| Llama
+  Adk -->|"LiteLLM openai/*"| Vllm
+  Adk -->|"LiteLLM openai/*"| Llama
 ```
+
+**Legend**
+
+| Area | Role |
+|------|------|
+| **Edge** | Serves the UI and proxies API traffic to the API container. |
+| **HTTP + loops** | Single uvicorn process: REST plus worker, agent worker, ingest, and background frame tasks (see `main.py` lifespan). |
+| **Chunk pipeline** | Per-chunk multimodal observe + text specialists; calls LLM via `vllm_client` / transport switch (`video_url` vs `image_jpeg_frames`). |
+| **ADK job agents** | Seven orchestrator agents (synthesis, risk review, …): `SkillToolset` + `skills/*/SKILL.md`, `LiteLlm` to the same `VLLM_BASE_URL`. |
+| **Search / frames** | Optional hybrid text search (BGE) and frame search (SigLIP); both use ChromaDB under `DATA_DIR`. |
+| **LLM backends** | Configure one; both paths hit `POST /v1/chat/completions` on the same logical base URL. |
 
 ## Project map (what lives where)
 
@@ -158,8 +205,8 @@ sequenceDiagram
     API->>DB: Store chunk_analysis + derived events
   end
 
-  API->>LLM: Job agents (text-only) over job summary (optional)
-  LLM-->>API: Agent outputs
+  API->>LLM: ADK job agents (SkillToolset + LiteLLM, text-only) over summary (optional)
+  LLM-->>API: Agent JSON outputs
   API->>DB: Store agent_run events
   UI->>API: Poll job status + results
   API-->>UI: Job summary, events, search results
