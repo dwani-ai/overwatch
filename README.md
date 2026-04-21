@@ -221,6 +221,16 @@ docker compose --profile local-vllm up --build
 # then set VLLM_BASE_URL=http://vllm-server:10802/v1
 ```
 
+For **llama.cpp** (see [`llama-cpp.yml`](llama-cpp.yml) and [`docs/llama-cpp_setup.md`](docs/llama-cpp_setup.md)): run the API and llama server on the **same Docker network** and point at the **service name**, not `localhost`:
+
+```bash
+docker compose -f compose.yml -f llama-cpp.yml up -d
+# .env
+# VLLM_BASE_URL=http://overwatch-vlm:9000/v1
+```
+
+If the LLM is only published on the host port `9000` while `overwatch-api` runs in Docker, use `VLLM_BASE_URL=http://host.docker.internal:9000/v1` (see `extra_hosts` in [`compose.yml`](compose.yml)). **`localhost` inside the API container is not your host.**
+
 Mount points: `./data/ingest` → `/data/ingest`, `./data/overwatch` → `/data/overwatch`.
 
 > **SigLIP first-run note:** `FRAME_SEARCH_ENABLED=true` (default) downloads the SigLIP model (~400 MB from HuggingFace Hub) on first startup. Mount `~/.cache/huggingface` or set `TRANSFORMERS_CACHE` to a volume to avoid re-downloading on restarts.
@@ -295,6 +305,8 @@ Key environment variables (all have sensible defaults):
 | `MAX_UPLOAD_BYTES` | `536870912` | Upload cap (512 MiB) |
 | `API_RATE_LIMIT_PER_MINUTE` | `0` | Per-IP rate limit (0 = disabled) |
 | `CORS_ORIGINS` | `http://localhost:5173,...` | Browser origins for CORS |
+
+**Job-level agents** (synthesis, risk review, incident brief, and the other orchestrator agents) run through the [Agent Development Kit](https://google.github.io/adk-docs/) `SkillToolset`, with [LiteLLM](https://docs.litellm.ai/) calling your existing OpenAI-compatible endpoint (`openai/<VLLM_MODEL>` at `VLLM_BASE_URL`). Domain instructions are in `src/overwatch/agents/skills/*/SKILL.md` following the [Agent Skills](https://agentskills.io/specification) layout.
 
 Set `VLLM_BASE_URL=` (empty) to disable all LLM calls. Set `SEARCH_ENABLED=false` to disable search entirely.
 

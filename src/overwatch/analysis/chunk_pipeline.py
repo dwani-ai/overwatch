@@ -13,8 +13,10 @@ from overwatch.models import (
     SpecialistMainOut,
     SpecialistSecLogOut,
 )
+from overwatch.video.jpeg_frames import extract_mjpeg_frames_from_mp4_bytes
 from overwatch.vllm_client import (
     chat_completion,
+    chunk_jpeg_frames_user_messages,
     chunk_video_user_messages,
     extract_assistant_text,
 )
@@ -33,6 +35,11 @@ Rules:
 - **No personal identities** (no names, no face recognition claims).
 - If unsure, still list best-effort observations with cautious wording in "what".
 """
+
+_FRAME_STILLS_NOTE = (
+    "\n\nVisual input: JPEG stills sampled in time order from the same wall-clock segment of the "
+    "recording (not every video frame). Infer motion and activity from changes across consecutive images."
+)
 
 
 def _repair_message(invalid_snippet: str) -> dict[str, str]:
@@ -132,12 +139,64 @@ async def run_structured_chunk_analysis(
     Returns a single serializable payload for a ``chunk_analysis`` event + job summary merging.
     """
     duration_sec = max(0.01, (chunk.end_pts_ms - chunk.start_pts_ms) / 1000.0)
-    observe_instr = _OBSERVE_INSTRUCTION.format(
+    observe_instr_base = _OBSERVE_INSTRUCTION.format(
         start_ms=chunk.start_pts_ms,
         end_ms=chunk.end_pts_ms,
         duration_sec=duration_sec,
     )
-    mm = chunk_video_user_messages(instruction=observe_instr, mp4_bytes=mp4_bytes)
+    if settings.vllm_chunk_multimodal_transport == "image_jpeg_frames":
+        observe_instr = observe_instr_base + _FRAME_STILLS_NOTE
+        frames = await extract_mjpeg_frames_from_mp4_bytes(
+            mp4_bytes,
+            max_frames=settings.vllm_chunk_observe_max_frames,
+            max_width=settings.vllm_chunk_observe_frame_max_width,
+            sample_fps=settings.vllm_chunk_observe_sample_fps,
+        )
+        if not frames:
+            logger.warning(
+                "Chunk %s: no JPEG frames from segment (transport=image_jpeg_frames); skipping observe",
+                chunk.chunk_index,
+            )
+            merged = ChunkAnalysisMerged(
+                chunk_index=chunk.chunk_index,
+                start_pts_ms=chunk.start_pts_ms,
+                end_pts_ms=chunk.end_pts_ms,
+                start_frame=chunk.start_frame,
+                end_frame=chunk.end_frame,
+                scene_summary="",
+                main_events=[],
+                security=[],
+                logistics=[],
+                attendance=AttendanceOut(),
+            )
+            return {
+                "chunk_index": chunk.chunk_index,
+                "start_pts_ms": chunk.start_pts_ms,
+                "end_pts_ms": chunk.end_pts_ms,
+                "start_frame": chunk.start_frame,
+                "end_frame": chunk.end_frame,
+                "segment_bytes": len(mp4_bytes),
+                "merged": merged.model_dump(),
+                "meta": {
+                    "observe_ok": False,
+                    "observe_skip_reason": "no_jpeg_frames_from_segment",
+                    "specialist_ok": {
+                        "main_events": False,
+                        "security_logistics": False,
+                        "attendance": False,
+                    },
+                    "attempts": {
+                        "observe": 0,
+                        "main_events": 0,
+                        "security_logistics": 0,
+                        "attendance": 0,
+                    },
+                },
+            }
+        mm = chunk_jpeg_frames_user_messages(instruction=observe_instr, jpeg_frames=frames)
+    else:
+        observe_instr = observe_instr_base
+        mm = chunk_video_user_messages(instruction=observe_instr, mp4_bytes=mp4_bytes)
 
     obs, obs_attempts = await _complete_json_multimodal(
         openai_base=openai_base,

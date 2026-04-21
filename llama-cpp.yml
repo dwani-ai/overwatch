@@ -1,0 +1,39 @@
+# llama.cpp OpenAI-compatible server (Gemma4 GGUF). Use with Overwatch:
+#   docker compose -f compose.yml -f llama-cpp.yml up -d
+# Set VLLM_BASE_URL=http://overwatch-vlm:9000/v1 (not localhost — the API runs in another container).
+# Set VLLM_CHUNK_MULTIMODAL_TRANSPORT=image_jpeg_frames (llama.cpp rejects video_url; see compose.llama-cpp.yml).
+# OpenAI-compatible base URL must include /v1 (same as VLLM_BASE_URL for vLLM).
+
+services:
+  overwatch-vlm:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: overwatch-vlm
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    command: >
+      --model /models/gemma4-e2b/gemma-4-E2B-it-Q4_K_M.gguf
+      --mmproj /models/gemma4-e2b/mmproj-BF16.gguf
+      --host 0.0.0.0
+      --port 9000
+      --ctx-size 32768
+      --n-gpu-layers 99
+      --jinja
+      --alias gemma4
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s

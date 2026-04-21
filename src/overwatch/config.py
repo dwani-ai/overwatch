@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -33,6 +33,17 @@ class Settings(BaseSettings):
     vllm_video_scale_width: int = Field(default=480, ge=160, le=1280)
     vllm_video_crf: int = Field(default=30, ge=18, le=40)
     vllm_segment_include_audio: bool = Field(default=True)
+    # video_url = vLLM-style MP4 data URI; image_jpeg_frames = OpenAI image_url strips (llama.cpp server).
+    vllm_chunk_multimodal_transport: Literal["video_url", "image_jpeg_frames"] = Field(
+        default="video_url",
+        description=(
+            "How chunk observe calls send vision: video_url (vLLM / hosted Gemma video) "
+            "or image_jpeg_frames (JPEG stills as image_url — required for llama.cpp /image-only servers)."
+        ),
+    )
+    vllm_chunk_observe_max_frames: int = Field(default=8, ge=1, le=24)
+    vllm_chunk_observe_frame_max_width: int = Field(default=768, ge=320, le=1280)
+    vllm_chunk_observe_sample_fps: float = Field(default=0.5, ge=0.1, le=5.0)
     vllm_json_retry_max: int = Field(default=2, ge=1, le=6)
     vllm_specialist_max_tokens: int = Field(default=800, ge=64, le=4096)
     # Text-only job agents (e.g. synthesis over JobSummary JSON)

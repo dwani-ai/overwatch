@@ -5,6 +5,8 @@ description = "Agentic video analytics — ingest, jobs, events API"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "google-adk[extensions]>=1.25.0",
+  "litellm>=1.0.0",
   "fastapi>=0.115.0",
   "uvicorn[standard]>=0.32.0",
   "pydantic-settings>=2.6.0",
@@ -23,6 +25,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+overwatch = ["agents/skills/**/*.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

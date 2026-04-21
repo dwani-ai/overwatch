@@ -1,0 +1,104 @@
+# Overwatch + llama.cpp (Gemma4 GGUF) on one Docker network.
+#
+#   docker compose -f compose.llama-cpp.yml up -d
+#
+# Place GGUF weights under ./models (paths match overwatch-vlm command below).
+# Default VLLM_BASE_URL is http://overwatch-vlm:9000/v1 (same compose network).
+# llama.cpp does not accept OpenAI ``video_url`` parts — chunk observe uses JPEG stills as ``image_url``.
+# Override in .env if you use a different backend.
+
+services:
+  overwatch-vlm:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: overwatch-vlm
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    command: >
+      --model /models/gemma4-e2b/gemma-4-E2B-it-Q4_K_M.gguf
+      --mmproj /models/gemma4-e2b/mmproj-BF16.gguf
+      --host 0.0.0.0
+      --port 9000
+      --ctx-size 32768
+      --n-gpu-layers 99
+      --jinja
+      --alias gemma4
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  overwatch-api:
+    build: .
+    container_name: overwatch-api
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      overwatch-vlm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 300s
+    environment:
+      - HF_HOME=/root/.cache/huggingface
+      - DATA_DIR=/data/overwatch
+      - INGEST_DIR=/data/ingest
+      - VLLM_BASE_URL=${VLLM_BASE_URL:-http://overwatch-vlm:9000/v1}
+      - VLLM_MODEL=${VLLM_MODEL:-gemma4}
+      - VLLM_API_KEY=${VLLM_API_KEY}
+      - VLLM_CHAT_TIMEOUT_SEC=120
+      - VLLM_MULTIMODAL_ENABLED=${VLLM_MULTIMODAL_ENABLED:-true}
+      - VLLM_CHUNK_MULTIMODAL_TRANSPORT=${VLLM_CHUNK_MULTIMODAL_TRANSPORT:-image_jpeg_frames}
+      - VLLM_MAX_CHUNKS_PER_JOB=${VLLM_MAX_CHUNKS_PER_JOB:-4}
+      - VLLM_CHUNK_TIMEOUT_SEC=${VLLM_CHUNK_TIMEOUT_SEC:-600}
+      - VLLM_CHUNK_MAX_TOKENS=${VLLM_CHUNK_MAX_TOKENS:-1024}
+      - VLLM_SEGMENT_MAX_BYTES=${VLLM_SEGMENT_MAX_BYTES:-18000000}
+      - VLLM_VIDEO_SCALE_WIDTH=${VLLM_VIDEO_SCALE_WIDTH:-480}
+      - VLLM_SEGMENT_INCLUDE_AUDIO=${VLLM_SEGMENT_INCLUDE_AUDIO:-true}
+      - VLLM_JSON_RETRY_MAX=${VLLM_JSON_RETRY_MAX:-2}
+      - VLLM_SPECIALIST_MAX_TOKENS=${VLLM_SPECIALIST_MAX_TOKENS:-800}
+      - VLLM_AGENT_MAX_TOKENS=${VLLM_AGENT_MAX_TOKENS:-2048}
+      - VLLM_AGENT_TIMEOUT_SEC=${VLLM_AGENT_TIMEOUT_SEC:-120}
+      - INGEST_POLL_INTERVAL_SEC=5
+      - INGEST_STABLE_SEC=2
+      - WORKER_POLL_INTERVAL_SEC=1
+      - AGENT_WORKER_POLL_INTERVAL_SEC=0.4
+      - AGENT_RUN_STALE_SEC=${AGENT_RUN_STALE_SEC:-900}
+      - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-536870912}
+      - API_RATE_LIMIT_PER_MINUTE=${API_RATE_LIMIT_PER_MINUTE:-0}
+    volumes:
+      - ./data/ingest:/data/ingest
+      - ./data/overwatch:/data/overwatch
+      - hf-cache:/root/.cache/huggingface
+    restart: unless-stopped
+
+  overwatch-ui:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: overwatch-ui
+    ports:
+      - "80:80"
+    depends_on:
+      overwatch-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
