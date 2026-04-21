@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 from overwatch.agents.loss_prevention import run_loss_prevention_agent
 from overwatch.config import Settings
-from overwatch.vllm_client import VllmCallResult
+from overwatch.models import LossPreventionAgentResult
 
 
 class TestLossPreventionAgent(unittest.IsolatedAsyncioTestCase):
@@ -15,14 +15,19 @@ class TestLossPreventionAgent(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.assertIn("error", meta)
 
-    async def test_parses_valid_json_response(self) -> None:
+    async def test_returns_result_from_adk_runner(self) -> None:
         settings = Settings(vllm_base_url="http://test/v1", vllm_model="gemma4")
-        content = (
-            '{"schema_version":"1","narrative":"Calm.","behavioral_observations":["a"],'
-            '"risk_level":"low","suggested_actions":[]}'
+        ok = LossPreventionAgentResult(
+            narrative="Calm.",
+            behavioral_observations=["a"],
+            risk_level="low",
+            suggested_actions=[],
         )
-        fake = VllmCallResult(ok=True, data={"choices": [{"message": {"content": content}}]})
-        with patch("overwatch.agents.loss_prevention.chat_completion", new_callable=AsyncMock, return_value=fake):
+        with patch(
+            "overwatch.agents.loss_prevention.run_job_agent_adk",
+            new_callable=AsyncMock,
+            return_value=(ok, {"attempts": 1, "truncated_input": False, "model": "gemma4"}),
+        ):
             result, meta = await run_loss_prevention_agent(settings, {"schema_version": "1", "chunk_analyses": []})
         self.assertIsNotNone(result)
         assert result is not None

@@ -296,6 +296,8 @@ Key environment variables (all have sensible defaults):
 | `API_RATE_LIMIT_PER_MINUTE` | `0` | Per-IP rate limit (0 = disabled) |
 | `CORS_ORIGINS` | `http://localhost:5173,...` | Browser origins for CORS |
 
+**Job-level agents** (synthesis, risk review, incident brief, and the other orchestrator agents) run through the [Agent Development Kit](https://google.github.io/adk-docs/) `SkillToolset`, with [LiteLLM](https://docs.litellm.ai/) calling your existing OpenAI-compatible endpoint (`openai/<VLLM_MODEL>` at `VLLM_BASE_URL`). Domain instructions are in `src/overwatch/agents/skills/*/SKILL.md` following the [Agent Skills](https://agentskills.io/specification) layout.
+
 Set `VLLM_BASE_URL=` (empty) to disable all LLM calls. Set `SEARCH_ENABLED=false` to disable search entirely.
 
 > Full configuration reference with all 50+ variables: [docs/technical_report.md § 13](docs/technical_report.md)
