@@ -587,3 +587,68 @@ export async function searchByImage(
   if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
   return r.json();
 }
+
+// ---------------------------------------------------------------------------
+// Live ISS (autonomous capture + rolling analysis)
+// ---------------------------------------------------------------------------
+
+export type LiveIssStatus = {
+  enabled: boolean;
+  running: boolean;
+  throttled: boolean;
+  throttle_reason?: string | null;
+  throttle_delay_sec?: number | null;
+  capture_health: "healthy" | "degraded" | "down" | "disabled";
+  analysis_health: "healthy" | "degraded" | "down" | "disabled";
+  last_capture_at: string | null;
+  last_enqueued_job_at: string | null;
+  last_completed_job_at: string | null;
+  capture_lag_sec: number | null;
+  analysis_lag_sec: number | null;
+  pending_jobs: number;
+  processing_jobs: number;
+  max_pending_jobs?: number;
+  active_jobs_snapshot?: { pending: number; processing: number };
+  last_error: string | null;
+  youtube_embed_url: string;
+  capture_url_configured: boolean;
+};
+
+export type LiveIssLatest = {
+  job_id: string | null;
+  source_path: string | null;
+  captured_at: string | null;
+  completed_at: string | null;
+  summary_preview: string | null;
+  visual_alert_count: number;
+  scene_change_count: number;
+  anomaly_count: number;
+  risk_level: string | null;
+};
+
+export type LiveIssHistoryItem = {
+  job_id: string;
+  captured_at: string | null;
+  completed_at: string | null;
+  status: string;
+  summary_preview: string | null;
+};
+
+export async function getLiveIssStatus(): Promise<LiveIssStatus> {
+  const r = await apiFetch("/live/iss/status");
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getLiveIssLatest(): Promise<LiveIssLatest> {
+  const r = await apiFetch("/live/iss/latest");
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}
+
+export async function getLiveIssHistory(limit = 6): Promise<{ items: LiveIssHistoryItem[]; limit: number }> {
+  const lim = Math.min(Math.max(limit, 1), 20);
+  const r = await apiFetch(`/live/iss/history?limit=${lim}`);
+  if (!r.ok) throw new Error(formatHttpError(r.status, await r.text()));
+  return r.json();
+}

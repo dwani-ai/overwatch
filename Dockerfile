@@ -1,5 +1,6 @@
 FROM python:3.12-slim-bookworm
 
+# Server runtime dependencies (ffmpeg is required for chunking/frame extraction).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg curl \
     && rm -rf /var/lib/apt/lists/*
@@ -15,6 +16,7 @@ RUN pip install --no-cache-dir \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir yt-dlp
 
 COPY src ./src
 ENV PYTHONPATH=/app/src

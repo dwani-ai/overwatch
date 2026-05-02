@@ -19,6 +19,24 @@ class Settings(BaseSettings):
     ingest_stable_sec: float = Field(default=2.0, ge=0.0)
     ingest_extensions: str = Field(default=".mp4,.mkv,.mov,.avi,.webm,.m4v")
 
+    # Autonomous live ISS capture (windowed segments written into INGEST_DIR/live/iss)
+    live_iss_enabled: bool = Field(default=False)
+    live_iss_capture_url: str = Field(default="")
+    live_iss_youtube_watch_url: str = Field(
+        default="https://www.youtube.com/watch?v=FkP_Qxw5xns"
+    )
+    live_iss_auto_resolve_capture_url: bool = Field(default=True)
+    live_iss_resolve_interval_sec: float = Field(default=1800.0, ge=60.0, le=86400.0)
+    live_iss_yt_dlp_bin: str = Field(default="yt-dlp")
+    live_iss_segment_sec: float = Field(default=60.0, ge=10.0, le=600.0)
+    live_iss_capture_interval_sec: float = Field(default=60.0, ge=10.0, le=600.0)
+    live_iss_retention_segments: int = Field(default=180, ge=1, le=10000)
+    live_iss_max_pending_jobs: int = Field(default=5, ge=1, le=200)
+    live_iss_status_stale_sec: float = Field(default=240.0, ge=30.0, le=86400.0)
+    live_iss_youtube_embed_url: str = Field(
+        default="https://www.youtube.com/embed/itdpuGHAcpg?autoplay=1&mute=1"
+    )
+
     # OpenAI-compatible root (prefix before /chat/completions). Set via env; empty disables vLLM.
     vllm_base_url: str = Field(default="")
     vllm_model: str = Field(default="gemma4")

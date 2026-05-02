@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -46,6 +47,43 @@ def get_store(request: Request) -> JobStore:
 StoreDep = Annotated[JobStore, Depends(get_store)]
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _is_live_iss_job(job: JobRecord) -> bool:
+    return "/live/iss/" in job.source_path.replace("\\", "/")
+
+
+def _summary_preview(summary: dict[str, Any] | None) -> str | None:
+    if not isinstance(summary, dict):
+        return None
+    chunks = summary.get("chunk_analyses")
+    if not isinstance(chunks, list) or not chunks:
+        return None
+    first = chunks[0] if isinstance(chunks[0], dict) else None
+    if not isinstance(first, dict):
+        return None
+    merged = first.get("merged")
+    if not isinstance(merged, dict):
+        return None
+    txt = merged.get("scene_summary")
+    if not isinstance(txt, str) or not txt.strip():
+        return None
+    t = txt.strip()
+    return t if len(t) <= 220 else f"{t[:220]}…"
+
+
+def _health_from_lag(lag_sec: float | None, healthy_sec: float, stale_sec: float) -> str:
+    if lag_sec is None:
+        return "down"
+    if lag_sec <= healthy_sec:
+        return "healthy"
+    if lag_sec <= stale_sec:
+        return "degraded"
+    return "down"
+
+
 @router.get("/health")
 async def health(request: Request) -> dict[str, Any]:
     indexer = getattr(request.app.state, "search_indexer", None)
@@ -55,6 +93,134 @@ async def health(request: Request) -> dict[str, Any]:
         "search": "ready" if indexer is not None else "unavailable",
         "frame_search": "ready" if frame_indexer is not None else "unavailable",
     }
+
+
+@router.get("/live/iss/status")
+async def live_iss_status(request: Request, store: StoreDep) -> dict[str, Any]:
+    settings: Settings = request.app.state.settings
+    state = getattr(request.app.state, "live_iss_state", None)
+    raw_state = state.to_public_dict() if state is not None else {}
+    enabled = bool(settings.live_iss_enabled)
+
+    rows = await store.list_jobs(limit=500)
+    live_rows = [j for j in rows if _is_live_iss_job(j)]
+    pending_jobs = sum(1 for j in live_rows if j.status == JobStatus.pending)
+    processing_jobs = sum(1 for j in live_rows if j.status == JobStatus.processing)
+    completed = next((j for j in live_rows if j.status == JobStatus.completed), None)
+
+    now = _utc_now()
+    last_capture_at_iso = raw_state.get("last_capture_at")
+    last_capture_at = (
+        datetime.fromisoformat(last_capture_at_iso) if isinstance(last_capture_at_iso, str) else None
+    )
+    capture_lag_sec = (now - last_capture_at).total_seconds() if last_capture_at else None
+
+    last_completed_at = completed.updated_at if completed is not None else None
+    analysis_lag_sec = (now - last_completed_at).total_seconds() if last_completed_at else None
+
+    healthy_sec = settings.live_iss_capture_interval_sec * 2.0
+    stale_sec = max(settings.live_iss_status_stale_sec, healthy_sec + 30.0)
+
+    capture_health = (
+        "disabled" if not enabled else _health_from_lag(capture_lag_sec, healthy_sec, stale_sec)
+    )
+    analysis_health = (
+        "disabled" if not enabled else _health_from_lag(analysis_lag_sec, healthy_sec + 60.0, stale_sec + 180.0)
+    )
+
+    return {
+        "enabled": enabled,
+        "capture_health": capture_health,
+        "analysis_health": analysis_health,
+        "last_capture_at": last_capture_at.isoformat() if last_capture_at else None,
+        "last_resolved_capture_url_at": raw_state.get("last_resolved_capture_url_at"),
+        "last_enqueued_job_at": live_rows[0].created_at.isoformat() if live_rows else None,
+        "last_completed_job_at": last_completed_at.isoformat() if last_completed_at else None,
+        "capture_lag_sec": capture_lag_sec,
+        "analysis_lag_sec": analysis_lag_sec,
+        "pending_jobs": pending_jobs,
+        "processing_jobs": processing_jobs,
+        "max_pending_jobs": settings.live_iss_max_pending_jobs,
+        "last_error": raw_state.get("last_error"),
+        "running": raw_state.get("running", False),
+        "throttled": raw_state.get("throttled", False),
+        "throttle_reason": raw_state.get("throttle_reason"),
+        "throttle_delay_sec": raw_state.get("throttle_delay_sec"),
+        "active_jobs_snapshot": {
+            "pending": raw_state.get("pending_jobs", pending_jobs),
+            "processing": raw_state.get("processing_jobs", processing_jobs),
+        },
+        "youtube_embed_url": settings.live_iss_youtube_embed_url,
+        "youtube_watch_url": settings.live_iss_youtube_watch_url,
+        "auto_resolve_capture_url": settings.live_iss_auto_resolve_capture_url,
+        "capture_url_configured": bool(settings.live_iss_capture_url.strip()),
+    }
+
+
+@router.get("/live/iss/latest")
+async def live_iss_latest(store: StoreDep) -> dict[str, Any]:
+    rows = await store.list_jobs(limit=500)
+    job = next((j for j in rows if _is_live_iss_job(j) and j.status == JobStatus.completed), None)
+    if job is None:
+        return {
+            "job_id": None,
+            "source_path": None,
+            "captured_at": None,
+            "completed_at": None,
+            "summary_preview": None,
+            "visual_alert_count": 0,
+            "scene_change_count": 0,
+            "anomaly_count": 0,
+            "risk_level": None,
+        }
+
+    events = await store.list_events(job.id)
+    visual_alert_count = sum(1 for e in events if e.event_type == "visual_alert")
+    scene_change_count = 0
+    anomaly_count = 0
+    risk_level: str | None = None
+    for ev in events:
+        if ev.event_type == "scene_changes":
+            scene_change_count = int(ev.payload.get("count") or len(ev.payload.get("changes") or []))
+        elif ev.event_type == "frame_anomalies":
+            anomaly_count = int(ev.payload.get("count") or len(ev.payload.get("anomalies") or []))
+        elif ev.event_type == AGENT_RISK_REVIEW_EVENT:
+            rr = ev.payload.get("result")
+            if isinstance(rr, dict):
+                rv = rr.get("overall_risk")
+                if isinstance(rv, str):
+                    risk_level = rv
+
+    return {
+        "job_id": job.id,
+        "source_path": job.source_path,
+        "captured_at": job.created_at.isoformat(),
+        "completed_at": job.updated_at.isoformat(),
+        "summary_preview": _summary_preview(job.summary),
+        "visual_alert_count": visual_alert_count,
+        "scene_change_count": scene_change_count,
+        "anomaly_count": anomaly_count,
+        "risk_level": risk_level,
+    }
+
+
+@router.get("/live/iss/history")
+async def live_iss_history(store: StoreDep, limit: int = 10) -> dict[str, Any]:
+    lim = min(max(limit, 1), 100)
+    rows = await store.list_jobs(limit=500)
+    live_rows = [j for j in rows if _is_live_iss_job(j)][:lim]
+    items: list[dict[str, Any]] = []
+    for job in live_rows:
+        items.append(
+            {
+                "job_id": job.id,
+                "captured_at": job.created_at.isoformat(),
+                "completed_at": job.updated_at.isoformat() if job.status == JobStatus.completed else None,
+                "status": job.status.value,
+                "summary_preview": _summary_preview(job.summary),
+            }
+        )
+    return {"items": items, "limit": lim}
 
 
 @router.get("/jobs", response_model=list[JobRecord])

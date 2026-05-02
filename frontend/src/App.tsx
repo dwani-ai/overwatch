@@ -9,6 +9,9 @@ import type {
   IndustryPack,
   JobRecord,
   Keyframe,
+  LiveIssHistoryItem,
+  LiveIssLatest,
+  LiveIssStatus,
   LossPreventionResult,
   OccupancyPoint,
   PerimeterChainResult,
@@ -25,6 +28,9 @@ import {
   deleteJob,
   getAnomalies,
   getJob,
+  getLiveIssLatest,
+  getLiveIssStatus,
+  getLiveIssHistory,
   getKeyframes,
   getOccupancy,
   getSceneChanges,
@@ -243,6 +249,148 @@ function basename(path: string): string {
   return i >= 0 ? s.slice(i + 1) : s;
 }
 
+function lagLabel(v: number | null): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  if (v < 60) return `${Math.round(v)}s`;
+  const m = Math.floor(v / 60);
+  const s = Math.round(v % 60);
+  return `${m}m ${s}s`;
+}
+
+function LiveIssWorkspace({ onOpenJob }: { onOpenJob: (jobId: string) => void }) {
+  const [status, setStatus] = useState<LiveIssStatus | null>(null);
+  const [latest, setLatest] = useState<LiveIssLatest | null>(null);
+  const [history, setHistory] = useState<LiveIssHistoryItem[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const [s, l, h] = await Promise.all([getLiveIssStatus(), getLiveIssLatest(), getLiveIssHistory(6)]);
+      setStatus(s);
+      setLatest(l);
+      setHistory(h.items ?? []);
+      setErr(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const t = setInterval(refresh, 5000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  return (
+    <section className="card live-iss-card">
+      <h2>Live ISS</h2>
+      <p className="muted small">
+        Autonomous mode: left pane is live view, right pane is rolling Overwatch analysis from captured windows.
+      </p>
+      {err ? <p className="error small">{err}</p> : null}
+      <div className="live-iss-grid">
+        <div className="live-pane">
+          <h3 className="live-pane-title">Live video feed</h3>
+          {status?.youtube_embed_url ? (
+            <iframe
+              className="live-video-frame"
+              src={status.youtube_embed_url}
+              title="ISS live video feed"
+              loading="lazy"
+              allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+              referrerPolicy="strict-origin-when-cross-origin"
+            />
+          ) : (
+            <p className="muted small">No embed URL configured.</p>
+          )}
+        </div>
+
+        <div className="live-pane">
+          <h3 className="live-pane-title">Live analysis</h3>
+          {!status ? (
+            <p className="muted small">Loading live status…</p>
+          ) : (
+            <>
+              <div className="live-health-row">
+                <span className={`live-health-badge health-${status.capture_health}`}>
+                  capture: {status.capture_health}
+                </span>
+                <span className={`live-health-badge health-${status.analysis_health}`}>
+                  analysis: {status.analysis_health}
+                </span>
+                {status.throttled ? <span className="live-health-badge health-degraded">throttled</span> : null}
+              </div>
+              <dl className="kv live-kv">
+                <dt>Enabled</dt>
+                <dd>{status.enabled ? "yes" : "no"}</dd>
+                <dt>Capture URL</dt>
+                <dd>{status.capture_url_configured ? "configured" : "missing"}</dd>
+                <dt>Capture lag</dt>
+                <dd>{lagLabel(status.capture_lag_sec)}</dd>
+                <dt>Analysis lag</dt>
+                <dd>{lagLabel(status.analysis_lag_sec)}</dd>
+                <dt>Queue</dt>
+                <dd>
+                  pending {status.pending_jobs} · processing {status.processing_jobs}
+                </dd>
+                <dt>Queue cap</dt>
+                <dd>{status.max_pending_jobs ?? "—"}</dd>
+              </dl>
+              {status.throttled ? (
+                <p className="phase small">
+                  Capture throttled
+                  {status.throttle_reason ? ` (${status.throttle_reason})` : ""}{" "}
+                  {status.throttle_delay_sec != null ? `· next retry in ${Math.round(status.throttle_delay_sec)}s` : ""}
+                </p>
+              ) : null}
+              {status.last_error ? <p className="error small">{status.last_error}</p> : null}
+            </>
+          )}
+          <div className="live-latest">
+            <h4 className="live-subtitle">Latest analyzed window</h4>
+            {!latest?.job_id ? (
+              <p className="muted small">No completed live analysis yet.</p>
+            ) : (
+              <>
+                <p className="small">
+                  Job <span className="mono">{latest.job_id.slice(0, 8)}…</span>{" "}
+                  <button type="button" className="linkish" onClick={() => onOpenJob(latest.job_id!)}>
+                    open
+                  </button>
+                </p>
+                {latest.summary_preview ? <p className="scene small">{latest.summary_preview}</p> : null}
+                <p className="muted small">
+                  alerts {latest.visual_alert_count} · scene changes {latest.scene_change_count} · anomalies{" "}
+                  {latest.anomaly_count}
+                  {latest.risk_level ? ` · risk ${latest.risk_level}` : ""}
+                </p>
+              </>
+            )}
+          </div>
+          <div className="live-latest">
+            <h4 className="live-subtitle">Recent windows</h4>
+            {history.length === 0 ? (
+              <p className="muted small">No recent windows yet.</p>
+            ) : (
+              <ul className="live-history-list">
+                {history.map((it) => (
+                  <li key={it.job_id} className="live-history-item">
+                    <span className={`live-history-status st-${it.status}`}>{it.status}</span>
+                    <button type="button" className="linkish small" onClick={() => onOpenJob(it.job_id)}>
+                      {it.job_id.slice(0, 8)}…
+                    </button>
+                    {it.summary_preview ? <span className="muted small">{it.summary_preview}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -390,6 +538,12 @@ export default function App() {
         <h1>Overwatch</h1>
         <p className="tag">Upload a video — results appear when the job finishes.</p>
       </header>
+
+      <LiveIssWorkspace
+        onOpenJob={(jobId) => {
+          openJob(jobId);
+        }}
+      />
 
       <section className="card">
         <h2>Recent jobs</h2>

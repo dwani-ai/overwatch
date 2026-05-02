@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from overwatch import __version__
 from overwatch.api.routes import router
 from overwatch.config import Settings
+from overwatch.live_capture import LiveIssCaptureLoop, LiveIssState
 from overwatch.ingest.folder import FolderIngest
 from overwatch.agents.runner import agent_worker_loop
 from overwatch.middleware import RequestLogMiddleware
@@ -172,6 +173,13 @@ async def lifespan(app: FastAPI):
 
     ingest_task = asyncio.create_task(ingest_loop())
 
+    live_iss_state = LiveIssState(enabled=settings.live_iss_enabled)
+    app.state.live_iss_state = live_iss_state
+    live_iss_task: asyncio.Task | None = None
+    if settings.live_iss_enabled:
+        live_capture = LiveIssCaptureLoop(settings, store, live_iss_state)
+        live_iss_task = asyncio.create_task(live_capture.run(stop))
+
     if settings.api_rate_limit_per_minute > 0:
         app.state._api_rate_limiter = SlidingWindowRateLimiter(settings.api_rate_limit_per_minute)
     else:
@@ -196,8 +204,14 @@ async def lifespan(app: FastAPI):
     ingest_task.cancel()
     worker_task.cancel()
     agent_worker_task.cancel()
+    if live_iss_task is not None:
+        live_iss_task.cancel()
     await asyncio.gather(
-        ingest_task, worker_task, agent_worker_task, return_exceptions=True
+        ingest_task,
+        worker_task,
+        agent_worker_task,
+        *( [live_iss_task] if live_iss_task is not None else [] ),
+        return_exceptions=True,
     )
     await conn.close()
 

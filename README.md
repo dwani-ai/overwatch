@@ -179,6 +179,9 @@ Search query
 ### Local (no Docker)
 
 ```bash
+# Required system dependency (video chunking/frame extraction)
+sudo apt-get update && sudo apt-get install -y ffmpeg
+
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -187,6 +190,20 @@ export INGEST_DIR=./data/ingest
 export VLLM_BASE_URL=https://your-vllm-host.example/v1
 export VLLM_MODEL=gemma4
 # export VLLM_API_KEY=...   # if required
+
+# Optional: autonomous ISS live capture (windowed)
+# export LIVE_ISS_ENABLED=true
+# export LIVE_ISS_CAPTURE_URL=https://<direct-hls-or-rtsp-url>   # optional when auto-resolve is on
+# export LIVE_ISS_YOUTUBE_WATCH_URL=https://www.youtube.com/watch?v=FkP_Qxw5xns
+# export LIVE_ISS_AUTO_RESOLVE_CAPTURE_URL=true
+# export LIVE_ISS_RESOLVE_INTERVAL_SEC=1800
+# export LIVE_ISS_YT_DLP_BIN=yt-dlp
+# export LIVE_ISS_SEGMENT_SEC=60
+# export LIVE_ISS_CAPTURE_INTERVAL_SEC=60
+# export LIVE_ISS_RETENTION_SEGMENTS=180
+# export LIVE_ISS_MAX_PENDING_JOBS=5
+# export LIVE_ISS_STATUS_STALE_SEC=240
+# export LIVE_ISS_YOUTUBE_EMBED_URL="https://www.youtube.com/embed/itdpuGHAcpg?autoplay=1&mute=1"
 
 PYTHONPATH=src uvicorn overwatch.main:app --reload --port 8080
 ```
@@ -198,6 +215,13 @@ Drop `.mp4` / `.mkv` / `.mov` files into `data/ingest/`. They are auto-ingested 
 npm install && npm run dev
 ```
 Open **http://localhost:5173** — the dev server proxies `/api/*` to the API on port 8080.
+
+For production-like autonomous setup with your endpoint:
+```bash
+export VLLM_BASE_URL=https://gemma4-api.dwani.ai/v1
+```
+
+If your capture URL is ephemeral (for example YouTube-derived manifests), leave `LIVE_ISS_CAPTURE_URL` empty and enable `LIVE_ISS_AUTO_RESOLVE_CAPTURE_URL=true`; Overwatch will refresh the direct capture URL from `LIVE_ISS_YOUTUBE_WATCH_URL` using `yt-dlp`.
 
 ### Docker Compose
 
@@ -273,6 +297,9 @@ curl -s -X POST http://localhost/v1/jobs/upload \
 | `GET /v1/jobs/{id}/keyframes` | Diverse representative keyframe timestamps |
 | `GET /v1/jobs/{id}/scene-changes` | Detected scene cuts |
 | `GET /v1/jobs/{id}/anomalies` | Visually anomalous frames |
+| `GET /v1/live/iss/status` | Autonomous live capture + analysis health |
+| `GET /v1/live/iss/latest` | Latest completed ISS live window summary |
+| `GET /v1/live/iss/history` | Recent ISS live windows (status + preview) |
 | `DELETE /v1/jobs/{id}` | Delete job + events + search index + frame embeddings |
 
 Full API reference: **`GET /docs`** or **`GET /redoc`** on the running server.
